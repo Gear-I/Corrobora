@@ -16,15 +16,16 @@ Can inconsistencies among Windows forensic artifacts be used to identify anti-fo
 - ✅ Modular Python project structure
 - ✅ GitHub Actions (Pylint)
 - ✅ Continuous Integration workflow
+- ✅ Windows Registry parser
+- ✅ Windows Prefetch parser
 
 ### In Development
 
-- 🚧 Windows Registry parser
-- 🚧 Windows Prefetch parser
+- 🚧Cross-artifact consistency engine
+
 
 ### Planned
 
-- Cross-artifact consistency engine
 - Evidence integrity assessment
 - Rule-based anti-forensic detection
 - HTML reporting
