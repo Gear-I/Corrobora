@@ -67,8 +67,8 @@ VeriTrace aims to:
 Current milestone:
 
 - ✅ EVTX Parser
-- 🚧 Registry Parser
-- ⏳ Prefetch Parser
+- ✅  Registry Parser
+- ✅ Prefetch Parser
 - ⏳ Correlation Engine
 
 ---
