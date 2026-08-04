@@ -24,6 +24,7 @@ Can inconsistencies among Windows forensic artifacts be used to identify anti-fo
 ### In Development
 
 - 🚧Cross-artifact consistency engine
+- 🚧VeriTrace GUI
 
 
 ### Planned
