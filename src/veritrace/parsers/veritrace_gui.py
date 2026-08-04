@@ -31,11 +31,11 @@ import threading
 import tkinter as tk
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
-from Correlation_Engine import (
+from correlation_engine import (
     CorrelationContext,
+    CorrelationEngine,
     CorrelationFinding,
     Severity,
     load_evtx_entries,
@@ -109,7 +109,7 @@ def run_analysis(
             registry_value_entries=tuple(load_registry_value_entries(registry_paths)),
             prefetch_entries=tuple(load_prefetch_entries(prefetch_paths)),
         )
-        engine =  Correlation_Engine()
+        engine = CorrelationEngine()
         findings = tuple(engine.run(context))
     except Exception as exc:  # noqa: BLE001 pylint: disable=broad-exception-caught
         # Deliberately broad: this is the top-level boundary between the
