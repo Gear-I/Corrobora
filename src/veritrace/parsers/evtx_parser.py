@@ -49,8 +49,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from xml.etree import ElementTree
 
-from evtx import evtx
-from evtx import evtx_record_xml_view
+from Evtx import evtx
+from Evtx import evtx_record_xml_view
 
 try:
     from tqdm import tqdm
