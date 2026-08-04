@@ -1,15 +1,15 @@
-"""VeriTrace GUI — single-file desktop application.
+"""VeriTrace GUI -- single-file desktop application.
 
 A Tkinter-based desktop interface for VeriTrace: lets an analyst pick
 EVTX, Registry, Prefetch, and MFT source files, run the correlation
 engine against them, and browse/export the resulting anti-forensic
-findings — without needing to use four separate command-line tools.
+findings -- without needing to use four separate command-line tools.
 
 This module depends on VeriTrace's other single-file modules
 (``evtx.py``, ``registry.py``, ``prefetch.py``, ``mft.py``,
 ``correlation_engine.py``) being importable from the same location.
 
-Uses only the Python standard library (``tkinter``) — no additional
+Uses only the Python standard library (``tkinter``) -- no additional
 GUI framework needs to be installed.
 
 Run:
@@ -17,6 +17,12 @@ Run:
 """
 
 from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+# Ensure the current module directory is in the path
+sys.path.insert(0, str(Path(__file__).parent))
 
 import html
 import logging
@@ -28,9 +34,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
-from correlation_engine import (
+from Correlation_Engine import (
     CorrelationContext,
-    CorrelationEngine,
     CorrelationFinding,
     Severity,
     load_evtx_entries,
@@ -48,12 +53,12 @@ _SEVERITY_COLORS: dict[Severity, str] = {
     Severity.INFO: "#566573",
 }
 
-_WINDOW_TITLE = "VeriTrace — Anti-Forensic Correlation Analysis"
+_WINDOW_TITLE = "VeriTrace -- Anti-Forensic Correlation Analysis"
 _WINDOW_SIZE = "1150x780"
 
 
 # --------------------------------------------------------------------------
-# Pure helper logic (no Tkinter dependency — independently testable)
+# Pure helper logic (no Tkinter dependency -- independently testable)
 # --------------------------------------------------------------------------
 
 
@@ -104,7 +109,7 @@ def run_analysis(
             registry_value_entries=tuple(load_registry_value_entries(registry_paths)),
             prefetch_entries=tuple(load_prefetch_entries(prefetch_paths)),
         )
-        engine = CorrelationEngine()
+        engine =  Correlation_Engine()
         findings = tuple(engine.run(context))
     except Exception as exc:  # noqa: BLE001 pylint: disable=broad-exception-caught
         # Deliberately broad: this is the top-level boundary between the
@@ -199,8 +204,8 @@ def generate_sample_mft_bytes() -> bytes:  # pylint: disable=too-many-statements
     generate valid sample files for those formats. The MFT parser,
     however, is a from-scratch binary implementation (see
     ``mft.py``), so this function can build genuinely valid,
-    spec-correct sample records — including one with real
-    timestomping — to let a user try the GUI's MFT analysis without
+    spec-correct sample records -- including one with real
+    timestomping -- to let a user try the GUI's MFT analysis without
     needing a real disk image.
 
     Returns:
@@ -240,7 +245,7 @@ def generate_sample_mft_bytes() -> bytes:  # pylint: disable=too-many-statements
         # Argument/local count intentionally suppressed: each parameter
         # is one distinct timestamp field in the real NTFS record being
         # constructed, and each local is one distinct byte-offset value
-        # in that binary layout — the same justified complexity as the
+        # in that binary layout -- the same justified complexity as the
         # equivalent construction code in mft.py's test fixtures.
         record = bytearray(1024)
         record[0:4] = b"FILE"
@@ -739,7 +744,7 @@ class VeriTraceApp:  # pylint: disable=too-many-instance-attributes,too-few-publ
                             f"MFT record #{record.record_number} "
                             f"('{record.filename}') has $STANDARD_INFORMATION "
                             f"timestamp(s) that predate its $FILE_NAME creation "
-                            f"time — indicating timestomping."
+                            f"time -- indicating timestomping."
                         ),
                         evidence=(
                             f"Anomalous fields: {', '.join(record.timestamp_anomalies)}",
