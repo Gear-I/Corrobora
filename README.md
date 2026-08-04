@@ -2,125 +2,113 @@
 
 # VeriTrace
 
-VeriTrace is an open-source digital forensics framework that evaluates the integrity of forensic evidence by identifying inconsistencies across multiple Windows artifacts to detect potential anti-forensic activity.
+VeriTrace is a Python-based digital forensics framework for detecting
+indicators of anti-forensic activity on Windows systems through
+cross-artifact consistency analysis.
 
-## Research Question
+Rather than parsing a single artifact type in isolation, VeriTrace
+cross-references independent evidence sources -- Windows Event Logs
+(EVTX), the Registry, Prefetch, and the NTFS Master File Table (MFT)
+-- to surface disagreements between them that a single artifact alone
+would never reveal: a program with execution evidence in Prefetch but
+no corresponding EVTX log entry, registry persistence with no
+supporting execution evidence at all, a Prefetch file whose name
+doesn't match its own embedded hash, or a file whose timestamps show
+signs of deliberate backdating (timestomping).
 
-Can inconsistencies among Windows forensic artifacts be used to identify anti-forensic activity?
+## Features
 
----
+- **EVTX parser** -- structured extraction of Windows Event Log records,
+  with per-record failure isolation and optional HTML report export.
+- **Registry parser** -- recursive hive walking with full key/value
+  extraction and LastWrite timestamp tracking.
+- **Prefetch parser** -- execution history extraction, including
+  filename/embedded-hash tamper detection.
+- **MFT parser** -- a from-scratch NTFS binary parser (no third-party
+  dependency) with built-in timestomping detection via
+  $STANDARD_INFORMATION vs. $FILE_NAME comparison.
+- **Correlation engine** -- a rule-based, fully deterministic (no AI/ML)
+  engine that cross-references all four artifact types to surface
+  anti-forensic indicators, ranked by severity.
+- **Desktop GUI** -- a Tkinter application for running the full
+  pipeline interactively, with live progress, sortable/filterable
+  results, and HTML export.
 
-## Current Features
+## Installation
 
-### Implemented
+```bash
+pip install -e .
+```
 
-- ✅ Windows Event Log (EVTX) parser
-- ✅ Modular Python project structure
-- ✅ GitHub Actions (Pylint)
-- ✅ Continuous Integration workflow
-- ✅ Windows Registry parser
-- ✅ Windows Prefetch parser
+This installs VeriTrace's dependencies (`python-evtx`, `python-registry`,
+`libscca-python`) and registers the following commands on your `PATH`:
 
-### In Development
+| Command | What it does |
+|---|---|
+| `veritrace-evtx` | Parse `.evtx` file(s) or a folder of them |
+| `veritrace-registry` | Parse a registry hive file |
+| `veritrace-prefetch` | Parse `.pf` file(s) or a folder of them |
+| `veritrace-mft` | Parse a raw `$MFT` file and detect timestomping |
+| `veritrace-correlate` | Run the full cross-artifact correlation engine |
+| `veritrace-gui` | Launch the desktop GUI |
 
-- 🚧Cross-artifact consistency engine
-- 🚧VeriTrace GUI
+For development (running the test suite and linters):
 
+```bash
+pip install -e ".[dev]"
+```
 
-### Planned
+For progress bars during large EVTX parses:
 
-- Evidence integrity assessment
-- Rule-based anti-forensic detection
-- HTML reporting
-- JSON reporting
-- Unit testing
-- Plugin architecture
+```bash
+pip install -e ".[progress]"
+```
 
----
+## Usage
 
-## Project Goals
+```bash
+# Parse a single EVTX file
+veritrace-evtx Security.evtx
 
-VeriTrace aims to:
+# Parse every .evtx file in a folder, with a progress bar
+veritrace-evtx "C:\Windows\System32\winevt\Logs" --progress
 
-- Improve confidence in forensic evidence
-- Detect potential evidence manipulation
-- Support Windows DFIR investigations
-- Complement existing forensic tools
-- Provide an open-source platform for forensic research
+# Run full cross-artifact correlation
+veritrace-correlate --evtx Security.evtx --registry NTUSER.DAT \
+    --prefetch "C:\Windows\Prefetch" --mft C_MFT
 
----
+# Launch the GUI
+veritrace-gui
+```
 
-## Technology Stack
+## Running tests
 
-- Python 3.12
-- Visual Studio Code
-- GitHub
-- GitHub Actions
-- Pylint
-- pytest
+```bash
+pytest tests/ -v
+ruff check src/
+mypy src/veritrace/parsers/
+pylint src/veritrace/parsers/*.py
+```
 
----
+## Design principles
 
-## Project Status
+- **No AI/ML.** Every detection rule is deterministic and explainable
+  -- a finding can always be traced back to the exact fields and
+  comparison that produced it.
+- **Resilient parsing.** A single corrupted or unreadable record,
+  file, or artifact never aborts an entire analysis run; failures are
+  isolated, logged, and reported alongside successful results.
+- **Testable by design.** Detection logic is decoupled from file I/O
+  wherever possible, so rules and extractors can be (and are) unit
+  tested against synthetic data without requiring real forensic
+  images.
 
-**Current Phase:** MVP Development
+## Project status
 
-Current milestone:
-
-- ✅ EVTX Parser
-- ✅  Registry Parser
-- ✅ Prefetch Parser
-- ⏳ Correlation Engine
-
----
-
-## Roadmap
-
-### Version 0.1
-
-- EVTX parser
-
-### Version 0.2
-
-- Registry parser
-
-### Version 0.3
-
-- Prefetch parser
-
-### Version 0.4
-
-- Cross-artifact consistency engine
-
-### Version 0.5
-
-- HTML & JSON reporting
-
-### Version 1.0
-
-Initial public release following completion of the master's capstone.
-
----
-
-
-## Academic Project
-
-VeriTrace is being developed as part of the Master of Science in Cybersecurity capstone at Western Governors University.
-
-The project is actively under development. Features, APIs, and documentation may change as research and implementation progress.
-
-----
-
-## Vision
-
-VeriTrace is intended to become a community-driven, open-source digital forensics framework that assists investigators in validating the integrity of Windows forensic evidence through cross-artifact consistency analysis.
-
-The long-term goal is to provide digital forensic examiners, incident responders, researchers, and students with a transparent, extensible, and explainable framework that complements existing forensic tools and encourages collaboration within the DFIR community.
-
-
-
-----
+This project is under active development. See `pyproject.toml` for a
+note on the current flat-module package layout and a planned
+namespaced-package refactor.
 
 ## License
 
-MIT License
+MIT -- see `LICENSE`.
