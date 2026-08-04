@@ -16,33 +16,38 @@ Run:
     python veritrace_gui.py
 """
 
+# pylint: disable=too-many-lines
+# This module's line count is inflated by embedded base64 logo image
+# data (see "Embedded brand assets" below), not by code complexity.
+
 from __future__ import annotations
-
-import sys
-from pathlib import Path
-
-# Ensure the current module directory is in the path
-sys.path.insert(0, str(Path(__file__).parent))
 
 import html
 import logging
 import queue
+import sys
 import threading
 import tkinter as tk
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
-from correlation_engine import (
+# Ensure the current module's own directory is on sys.path before
+# importing VeriTrace's other local modules below. This is normally
+# redundant (Python already does this for a directly-run script) but
+# some IDE debug launchers (e.g. certain VS Code configurations) can
+# start the interpreter with a different sys.path[0], so this makes
+# the local imports robust regardless of how the script is launched.
+sys.path.insert(0, str(Path(__file__).parent))
+
+from correlation_engine import (  # noqa: E402 pylint: disable=wrong-import-position
     CorrelationContext,
     CorrelationEngine,
     CorrelationFinding,
     Severity,
-    load_evtx_entries,
-    load_prefetch_entries,
-    load_registry_value_entries,
+    build_context,
 )
-from mft import MftParser
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +59,271 @@ _SEVERITY_COLORS: dict[Severity, str] = {
 }
 
 _WINDOW_TITLE = "VeriTrace -- Anti-Forensic Correlation Analysis"
-_WINDOW_SIZE = "1150x780"
+_WINDOW_SIZE = "1150x870"
 
+
+# --------------------------------------------------------------------------
+# Embedded brand assets
+# --------------------------------------------------------------------------
+#
+# The VeriTrace logo is embedded here as base64-encoded PNG data rather
+# than shipped as a separate image file, so the GUI has no external asset
+# to lose track of or resolve a path to -- it works regardless of the
+# working directory the script is launched from.
+#
+# To regenerate these constants from a new source logo image:
+#   from PIL import Image
+#   import base64, textwrap
+#   img = Image.open("new_logo.png").convert("RGB")
+#   img.resize((110, 110)).save("banner.png")   # header banner
+#   img.resize((64, 64)).save("icon.png")        # window/taskbar icon
+#   for name, path in [("_LOGO_BANNER_PNG_B64", "banner.png"),
+#                       ("_LOGO_ICON_PNG_B64", "icon.png")]:
+#       b64 = base64.b64encode(open(path, "rb").read()).decode("ascii")
+#       print(name, "=", repr(textwrap.wrap(b64, 96)))
+#
+
+_LOGO_BANNER_PNG_B64 = (
+    "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"
+    "RK5CYII="
+)
+
+_LOGO_ICON_PNG_B64 = (
+    "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"
+    "P9cIxAAAAABJRU5ErkJggg=="
+)
 
 # --------------------------------------------------------------------------
 # Pure helper logic (no Tkinter dependency -- independently testable)
@@ -84,30 +352,31 @@ def run_analysis(
     evtx_paths: list[str | Path],
     registry_paths: list[str | Path],
     prefetch_paths: list[str | Path],
+    mft_paths: list[str | Path],
 ) -> AnalysisOutcome:
     """Parse the given artifact sources and run the correlation engine.
 
     This function has no Tkinter dependency, so it can be unit tested
-    directly with synthetic file paths. MFT sources are intentionally
-    not accepted here: ``correlation_engine`` does not yet have an
-    MFT-aware loader, so MFT files are parsed and converted to
-    findings separately (see
-    :meth:`VeriTraceApp._analyze_mft_files`) and merged in by the
-    caller.
+    directly with synthetic file paths. Delegates entirely to
+    ``correlation_engine.build_context`` and
+    ``correlation_engine.CorrelationEngine``, which handle all four
+    artifact types (including MFT) as first-class citizens.
 
     Args:
         evtx_paths: Paths to ``.evtx`` files.
         registry_paths: Paths to registry hive files.
         prefetch_paths: Paths to ``.pf`` files and/or folders.
+        mft_paths: Paths to raw ``$MFT`` files.
 
     Returns:
         An :class:`AnalysisOutcome` describing the result.
     """
     try:
-        context = CorrelationContext(
-            evtx_entries=tuple(load_evtx_entries(evtx_paths)),
-            registry_value_entries=tuple(load_registry_value_entries(registry_paths)),
-            prefetch_entries=tuple(load_prefetch_entries(prefetch_paths)),
+        context = build_context(
+            evtx_paths=evtx_paths,
+            registry_paths=registry_paths,
+            prefetch_paths=prefetch_paths,
+            mft_paths=mft_paths,
         )
         engine = CorrelationEngine()
         findings = tuple(engine.run(context))
@@ -522,6 +791,8 @@ class VeriTraceApp:  # pylint: disable=too-many-instance-attributes,too-few-publ
         # Widgets are constructed in _build_widgets(); declared here with
         # their types so the full attribute surface of this class is
         # visible in one place.
+        self._icon_image: tk.PhotoImage
+        self._banner_image: tk.PhotoImage
         self._evtx_panel: ArtifactSourcePanel
         self._registry_panel: ArtifactSourcePanel
         self._prefetch_panel: ArtifactSourcePanel
@@ -534,18 +805,59 @@ class VeriTraceApp:  # pylint: disable=too-many-instance-attributes,too-few-publ
         self._detail_text: tk.Text
         self._log_text: scrolledtext.ScrolledText
 
+        self._set_window_icon()
         self._build_widgets()
         self._attach_logging()
         self.root.after(100, self._poll_queue)
+
+    def _set_window_icon(self) -> None:
+        """Set the window/taskbar icon from the embedded logo badge.
+
+        The image reference is kept on ``self`` -- Tkinter does not
+        keep its own strong reference to a ``PhotoImage``, so without
+        this the icon would be garbage-collected and silently vanish
+        shortly after being set.
+        """
+        try:
+            self._icon_image = tk.PhotoImage(data=_LOGO_ICON_PNG_B64)
+            self.root.iconphoto(True, self._icon_image)
+        except tk.TclError as exc:
+            logger.warning("Could not set window icon: %s", exc)
 
     # -- widget construction -------------------------------------------------
 
     def _build_widgets(self) -> None:
         """Build and lay out all top-level widgets."""
+        self._build_header()
         self._build_source_panels()
         self._build_controls()
         self._build_results_panel()
         self._build_log_panel()
+
+    def _build_header(self) -> None:
+        """Build the branded header banner at the top of the window.
+
+        Falls back to a plain text title (no crash) if the embedded
+        logo image data can't be decoded for any reason -- branding
+        is cosmetic and must never prevent the application from
+        starting.
+        """
+        header = tk.Frame(self.root, background="#000000")
+        header.pack(fill=tk.X)
+        try:
+            self._banner_image = tk.PhotoImage(data=_LOGO_BANNER_PNG_B64)
+            tk.Label(header, image=self._banner_image, background="#000000").pack(
+                pady=6
+            )
+        except tk.TclError as exc:
+            logger.warning("Could not load header banner image: %s", exc)
+            tk.Label(
+                header,
+                text="VeriTrace",
+                background="#000000",
+                foreground="#4a90d9",
+                font=("Segoe UI", 18, "bold"),
+            ).pack(pady=10)
 
     def _build_source_panels(self) -> None:
         """Build the four artifact-source selection panels."""
@@ -697,62 +1009,14 @@ class VeriTraceApp:  # pylint: disable=too-many-instance-attributes,too-few-publ
     ) -> None:
         """Run analysis on a background thread and post the outcome to the queue.
 
-        MFT parsing is handled here directly (rather than inside
-        :func:`run_analysis`) since ``correlation_engine`` does not
-        yet have an MFT-aware loader; MFT findings are computed
-        separately and merged in for display purposes.
-
         Args:
             evtx_paths: Paths to ``.evtx`` files.
             registry_paths: Paths to registry hive files.
             prefetch_paths: Paths to ``.pf`` files and/or folders.
             mft_paths: Paths to raw ``$MFT`` files.
         """
-        outcome = run_analysis(evtx_paths, registry_paths, prefetch_paths)
-        mft_findings = self._analyze_mft_files(mft_paths) if outcome.error is None else []
-        self._queue.put(("result", outcome, mft_findings))
-
-    @staticmethod
-    def _analyze_mft_files(mft_paths: list[str | Path]) -> list[CorrelationFinding]:
-        """Parse MFT files and convert timestomped records into findings.
-
-        Args:
-            mft_paths: Paths to raw ``$MFT`` files.
-
-        Returns:
-            A list of :class:`CorrelationFinding` for every likely
-            timestomped record found.
-        """
-        findings: list[CorrelationFinding] = []
-        for path in mft_paths:
-            parser = MftParser(path)
-            try:
-                records = parser.parse()
-            except Exception as exc:  # noqa: BLE001 pylint: disable=broad-exception-caught
-                # Deliberately broad: one unreadable MFT file must not
-                # abort analysis of the other selected artifact sources.
-                logger.error("Skipping MFT file '%s': %s", path, exc)
-                continue
-            for record in records:
-                if not record.likely_timestomped:
-                    continue
-                findings.append(
-                    CorrelationFinding(
-                        rule_name="mft_timestomping_detected",
-                        severity=Severity.HIGH,
-                        description=(
-                            f"MFT record #{record.record_number} "
-                            f"('{record.filename}') has $STANDARD_INFORMATION "
-                            f"timestamp(s) that predate its $FILE_NAME creation "
-                            f"time -- indicating timestomping."
-                        ),
-                        evidence=(
-                            f"Anomalous fields: {', '.join(record.timestamp_anomalies)}",
-                        ),
-                        source_paths=(str(path),),
-                    )
-                )
-        return findings
+        outcome = run_analysis(evtx_paths, registry_paths, prefetch_paths, mft_paths)
+        self._queue.put(("result", outcome))
 
     def _poll_queue(self) -> None:
         """Drain the worker-thread queue and apply updates on the main thread."""
@@ -762,20 +1026,16 @@ class VeriTraceApp:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 if item[0] == "log":
                     self._append_log(item[1])
                 elif item[0] == "result":
-                    self._handle_analysis_result(item[1], item[2])
+                    self._handle_analysis_result(item[1])
         except queue.Empty:
             pass
         self.root.after(100, self._poll_queue)
 
-    def _handle_analysis_result(
-        self, outcome: AnalysisOutcome, mft_findings: list[CorrelationFinding]
-    ) -> None:
+    def _handle_analysis_result(self, outcome: AnalysisOutcome) -> None:
         """Apply a completed analysis outcome to the UI.
 
         Args:
             outcome: The result from :func:`run_analysis`.
-            mft_findings: Findings derived from MFT files, computed
-                separately from the main correlation engine run.
         """
         self._progress.stop()
         self._run_button.configure(state=tk.NORMAL)
@@ -786,7 +1046,7 @@ class VeriTraceApp:  # pylint: disable=too-many-instance-attributes,too-few-publ
             messagebox.showerror("Analysis failed", outcome.error)
             return
 
-        all_findings = list(outcome.findings) + mft_findings
+        all_findings = list(outcome.findings)
         all_findings.sort(key=lambda f: list(Severity).index(f.severity), reverse=True)
         self._last_findings = all_findings
 
