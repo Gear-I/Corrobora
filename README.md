@@ -36,12 +36,41 @@ signs of deliberate backdating (timestomping).
 
 ## Installation
 
-```bash
-pip install -e .
-```
+**Requirements:** Python 3.11 or later, on Windows (VeriTrace's parsers are
+built for Windows forensic artifacts specifically).
 
-This installs VeriTrace's dependencies (`python-evtx`, `python-registry`,
-`libscca-python`) and registers the following commands on your `PATH`:
+1. Open a terminal **in the project's root folder** -- the one that
+   contains `pyproject.toml` directly (not inside `src/`):
+
+   ```powershell
+   cd C:\path\to\VeriTrace
+   dir pyproject.toml
+   ```
+
+   If `dir` doesn't find it, you're in the wrong folder -- fix that
+   before continuing.
+
+2. Install the project in editable mode. Note the trailing `.` --
+   it means "install the project defined right here"; leaving it off
+   causes a `-e option requires 1 argument` error.
+
+   ```powershell
+   pip install -e .
+   ```
+
+   This installs VeriTrace's dependencies (`python-evtx`,
+   `python-registry`, `libscca-python`) and registers the commands
+   listed below.
+
+3. Verify it installed correctly:
+
+   ```powershell
+   pip show veritrace
+   ```
+
+   This should print real package metadata. If it says "Package(s)
+   not found," step 2 didn't complete successfully -- scroll up in
+   its output for the actual error.
 
 | Command | What it does |
 |---|---|
@@ -50,19 +79,60 @@ This installs VeriTrace's dependencies (`python-evtx`, `python-registry`,
 | `veritrace-prefetch` | Parse `.pf` file(s) or a folder of them |
 | `veritrace-mft` | Parse a raw `$MFT` file and detect timestomping |
 | `veritrace-correlate` | Run the full cross-artifact correlation engine |
+| `veritrace-case` | Auto-discover artifacts in a case folder or `.zip` |
 | `veritrace-gui` | Launch the desktop GUI |
 
 For development (running the test suite and linters):
 
-```bash
+```powershell
 pip install -e ".[dev]"
 ```
 
 For progress bars during large EVTX parses:
 
-```bash
+```powershell
 pip install -e ".[progress]"
 ```
+
+### Running commands from any folder
+
+By default, the commands above only work while your terminal is in
+the same environment pip installed into. To run e.g. `veritrace-gui`
+from anywhere:
+
+1. Find where pip put the scripts:
+
+   ```powershell
+   python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
+   ```
+
+2. Add that folder to your Windows `PATH` (Start -> "Edit the system
+   environment variables" -> Environment Variables -> select `Path`
+   under User variables -> Edit -> New -> paste the folder path).
+
+3. Open a **new** terminal window (PATH changes don't apply to
+   already-open ones) and confirm:
+
+   ```powershell
+   where veritrace-gui
+   ```
+
+   This should print a real path. If you installed into a virtual
+   environment instead of your main Python, activate that
+   environment first (`venv\Scripts\activate`) rather than adding
+   it to your global `PATH`.
+
+### If you have multiple Python versions installed
+
+If `pip install -e .` fails with something like
+`requires a different Python: 3.11.9 not in '>=3.12'`, either:
+
+- Lower `requires-python` in `pyproject.toml` to `>=3.11` (the
+  codebase doesn't use any Python 3.12-exclusive syntax), or
+- Explicitly install with Python 3.12 if you have it available:
+  ```powershell
+  py -3.12 -m pip install -e .
+  ```
 
 ## Usage
 
@@ -76,6 +146,9 @@ veritrace-evtx "C:\Windows\System32\winevt\Logs" --progress
 # Run full cross-artifact correlation
 veritrace-correlate --evtx Security.evtx --registry NTUSER.DAT \
     --prefetch "C:\Windows\Prefetch" --mft C_MFT
+
+# Auto-discover artifacts in a case folder or zip, then analyze
+veritrace-case "C:\triage\case001" --analyze
 
 # Launch the GUI
 veritrace-gui
