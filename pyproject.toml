@@ -1,46 +1,94 @@
 [build-system]
-requires = ["setuptools>=69.0"]
+requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "veritrace"
 version = "0.1.0"
-description = "Evidence Integrity Assessment Framework for Detecting Anti-Forensic Activity in Windows Systems"
+description = "A digital forensics framework for detecting indicators of anti-forensic activity on Windows systems through cross-artifact consistency analysis."
 readme = "README.md"
-requires-python = ">=3.11"
-license = {text = "MIT"}
-
+requires-python = ">=3.12"
+license = { text = "MIT" }
 authors = [
-    {name = "Dielle De Noon"}
+    { name = "Dielle De Noon" },
 ]
-
 keywords = [
     "digital-forensics",
     "dfir",
-    "incident-response",
     "anti-forensics",
-    "windows-forensics",
-    "cybersecurity"
+    "evtx",
+    "ntfs",
+    "prefetch",
+    "windows-registry",
+    "incident-response",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: DFIR",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.12 or higher",
+    "Topic :: Digital Forensics and Incident Response",
 ]
 
 dependencies = [
-    "pandas>=2.2.0",
+    "python-evtx>=0.7.4",
     "python-registry>=1.3.1",
-    "python-evtx>=0.8.1",
-    "jinja2>=3.1.0",
-    "rich>=13.0.0"
+    "libscca-python>=20240427",
 ]
 
 [project.optional-dependencies]
+progress = ["tqdm>=4.60.0"]
 dev = [
     "pytest>=8.0.0",
-    "black>=24.0.0",
-    "ruff>=0.5.0"
+    "ruff>=0.5.0",
+    "mypy>=1.10.0",
+    "pylint>=3.0.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/Gear-I"
+Homepage = "https://github.com/Gear-I/VeriTrace"
 Repository = "https://github.com/Gear-I/VeriTrace"
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+# --- Console entry points -----------------------------------------------
+# Lets you run e.g. `veritrace-evtx Security.evtx` from anywhere on your
+# PATH after `pip install .`, instead of `python evtx.py Security.evtx`
+# from inside the source folder.
+[project.scripts]
+veritrace-evtx = "evtx:_main"
+veritrace-registry = "registry:_main"
+veritrace-prefetch = "prefetch:_main"
+veritrace-mft = "mft:_main"
+veritrace-correlate = "correlation_engine:_main"
+veritrace-case = "case_ingest:_main"
+veritrace-gui = "veritrace_gui:main"
+
+# --- Package layout -------------------------------------------------------
+# VeriTrace's modules import each other with bare names (e.g.
+# `from evtx import EvtxParser` inside correlation_engine.py), not
+# dotted package paths (`from veritrace.parsers.evtx import ...`).
+# To keep those imports working exactly as-is -- and avoid another round
+# of import-path breakage after everything was hard-won working -- these
+# six files are installed as flat top-level modules rather than as a
+# nested `veritrace.parsers` package. This is a pragmatic tradeoff:
+# generic module names like `evtx` or `registry` could theoretically
+# collide with another installed package's top-level module name.
+# A follow-up refactor to a proper namespaced `veritrace.parsers.*`
+# package (with corresponding relative imports) is recommended before
+# any wider public distribution.
+[tool.setuptools]
+py-modules = ["evtx", "registry", "prefetch", "mft", "correlation_engine", "case_ingest", "veritrace_gui"]
+package-dir = { "" = "src/veritrace/parsers" }
+
+# --- Tooling configuration (matches what's been used throughout dev) -----
+[tool.ruff]
+line-length = 100
+
+[tool.mypy]
+ignore_missing_imports = true
+
+[tool.pylint.format]
+max-line-length = 100
+
+[tool.pylint.main]
+extension-pkg-allow-list = ["pyscca"]
