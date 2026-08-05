@@ -29,7 +29,7 @@ import sys
 import threading
 import tkinter as tk
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
@@ -41,12 +41,12 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 # the local imports robust regardless of how the script is launched.
 sys.path.insert(0, str(Path(__file__).parent))
 
-from case_ingest import (  # noqa: E402 pylint: disable=wrong-import-position
+from case_ingest import (  # pylint: disable=wrong-import-position
     DiscoveredArtifacts,
     InvalidCasePathError,
     load_case,
 )
-from correlation_engine import (  # noqa: E402 pylint: disable=wrong-import-position
+from correlation_engine import (  # pylint: disable=wrong-import-position
     CorrelationContext,
     CorrelationEngine,
     CorrelationFinding,
@@ -385,7 +385,7 @@ def run_analysis(
         )
         engine = CorrelationEngine()
         findings = tuple(engine.run(context))
-    except Exception as exc:  # noqa: BLE001 pylint: disable=broad-exception-caught
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         # Deliberately broad: this is the top-level boundary between the
         # background worker thread and the GUI; any failure here must be
         # reported to the user rather than silently killing the thread.
@@ -422,7 +422,7 @@ def findings_to_html(findings: list[CorrelationFinding], title: str = "VeriTrace
             f"</tr>"
         )
     table_rows = "\n".join(rows) if rows else '<tr><td colspan="5">No findings.</td></tr>'
-    generated_at = datetime.now(timezone.utc).isoformat()
+    generated_at = datetime.now(UTC).isoformat()
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -502,7 +502,7 @@ def generate_sample_mft_bytes() -> bytes:  # pylint: disable=too-many-statements
         return bytes(attr)
 
     def _filetime(dt: datetime) -> bytes:
-        epoch = datetime(1601, 1, 1, tzinfo=timezone.utc)
+        epoch = datetime(1601, 1, 1, tzinfo=UTC)
         ticks = int((dt - epoch).total_seconds() * 10_000_000)
         return ticks.to_bytes(8, "little")
 
@@ -575,10 +575,10 @@ def generate_sample_mft_bytes() -> bytes:  # pylint: disable=too-many-statements
         record[28:32] = (1024).to_bytes(4, "little")
         return bytes(record)
 
-    ordinary_time = datetime(2024, 1, 10, 9, 0, 0, tzinfo=timezone.utc)
-    later_time = datetime(2024, 5, 2, 14, 30, 0, tzinfo=timezone.utc)
-    real_creation = datetime(2024, 6, 20, 3, 0, 0, tzinfo=timezone.utc)
-    backdated = datetime(2011, 3, 1, 0, 0, 0, tzinfo=timezone.utc)
+    ordinary_time = datetime(2024, 1, 10, 9, 0, 0, tzinfo=UTC)
+    later_time = datetime(2024, 5, 2, 14, 30, 0, tzinfo=UTC)
+    real_creation = datetime(2024, 6, 20, 3, 0, 0, tzinfo=UTC)
+    backdated = datetime(2011, 3, 1, 0, 0, 0, tzinfo=UTC)
 
     ordinary_file = _build_record(
         filename="report.docx",
@@ -805,6 +805,7 @@ class VeriTraceApp:  # pylint: disable=too-many-instance-attributes,too-few-publ
         self.root = root
         self.root.title(_WINDOW_TITLE)
         self.root.geometry(_WINDOW_SIZE)
+        self._maximize_window()
 
         self._queue: queue.Queue = queue.Queue()
         self._last_findings: list[CorrelationFinding] = []
@@ -832,6 +833,41 @@ class VeriTraceApp:  # pylint: disable=too-many-instance-attributes,too-few-publ
         self._attach_logging()
         self.root.after(100, self._poll_queue)
 
+    def _maximize_window(self) -> None:
+        """Start the window maximized so no panel is cut off on smaller screens.
+
+        The fixed default size in ``_WINDOW_SIZE`` was set generously
+        to fit every panel (source lists, controls, findings table,
+        detail pane, log) plus the header banner, but that total can
+        exceed the visible height of smaller/laptop screens if the
+        window isn't maximized -- with the findings table and log
+        panel, near the bottom, being the first things to end up
+        below the visible screen area. Starting maximized avoids that
+        regardless of screen size; the window remains a normal,
+        user-resizable window afterward.
+
+        ``wm_state('zoomed')`` is the standard, native way to do this
+        on Windows. It depends on window-manager support, though, so
+        as a robust fallback that doesn't depend on that at all, this
+        also explicitly sizes the window to the screen's own reported
+        dimensions -- which works even in environments where the
+        'zoomed' state hint is ignored.
+        """
+        try:
+            self.root.state("zoomed")
+        except tk.TclError as exc:
+            logger.debug("wm_state('zoomed') unavailable: %s", exc)
+
+        # Belt-and-suspenders: if 'zoomed' didn't actually take effect (its
+        # success can't be fully determined just from not raising -- some
+        # window managers silently ignore it), explicitly size the window
+        # to the screen's own reported dimensions instead.
+        self.root.update_idletasks()
+        if self.root.state() != "zoomed":
+            screen_width = self.root.winfo_screenwidth()
+            screen_height = self.root.winfo_screenheight()
+            self.root.geometry(f"{screen_width}x{screen_height}+0+0")
+
     def _set_window_icon(self) -> None:
         """Set the window/taskbar icon from the embedded logo badge.
 
@@ -849,14 +885,64 @@ class VeriTraceApp:  # pylint: disable=too-many-instance-attributes,too-few-publ
     # -- widget construction -------------------------------------------------
 
     def _build_widgets(self) -> None:
-        """Build and lay out all top-level widgets."""
-        self._build_header()
-        self._build_source_panels()
-        self._build_controls()
-        self._build_results_panel()
-        self._build_log_panel()
+        """Build and lay out all top-level widgets.
 
-    def _build_header(self) -> None:
+        Everything is built inside a scrollable canvas (see
+        :meth:`_build_scroll_container`) rather than packed directly
+        into the root window. On a screen too short to fit every
+        panel at once (a real issue on smaller/laptop displays --
+        the four source panels plus the header alone can exceed a
+        768px-tall screen), the content becomes scrollable instead of
+        having its bottom panels (findings, log) silently pushed
+        below the visible screen area with no way to reach them.
+        """
+        content = self._build_scroll_container()
+        self._build_header(content)
+        self._build_source_panels(content)
+        self._build_controls(content)
+        self._build_results_panel(content)
+        self._build_log_panel(content)
+
+    def _build_scroll_container(self) -> tk.Widget:
+        """Build a scrollable canvas that all other widgets are placed inside.
+
+        Returns:
+            The frame inside the canvas that subsequent
+            ``_build_*`` methods should use as their parent widget,
+            instead of ``self.root`` directly.
+        """
+        canvas = tk.Canvas(self.root, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(self.root, orient=tk.VERTICAL, command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        content = ttk.Frame(canvas)
+        content_window = canvas.create_window((0, 0), window=content, anchor="nw")
+
+        def _sync_scroll_region(_event: object) -> None:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _sync_content_width(event: object) -> None:
+            # Keep the inner frame exactly as wide as the canvas viewport,
+            # so widgets that expand horizontally (fill=tk.X) do so
+            # correctly instead of being clipped to the frame's natural
+            # (unscrolled) size.
+            canvas.itemconfigure(content_window, width=event.width)  # type: ignore[attr-defined]
+
+        content.bind("<Configure>", _sync_scroll_region)
+        canvas.bind("<Configure>", _sync_content_width)
+
+        def _on_mouse_wheel(event: tk.Event) -> None:
+            # Windows reports wheel movement in event.delta (multiples of
+            # 120); this converts it to a small number of scroll units.
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        canvas.bind_all("<MouseWheel>", _on_mouse_wheel)
+
+        return content
+
+    def _build_header(self, parent: tk.Widget) -> None:
         """Build the branded header banner at the top of the window.
 
         Falls back to a plain text title (no crash) if the embedded
@@ -864,7 +950,7 @@ class VeriTraceApp:  # pylint: disable=too-many-instance-attributes,too-few-publ
         is cosmetic and must never prevent the application from
         starting.
         """
-        header = tk.Frame(self.root, background="#000000")
+        header = tk.Frame(parent, background="#000000")
         header.pack(fill=tk.X)
         try:
             self._banner_image = tk.PhotoImage(data=_LOGO_BANNER_PNG_B64)
@@ -881,9 +967,9 @@ class VeriTraceApp:  # pylint: disable=too-many-instance-attributes,too-few-publ
                 font=("Segoe UI", 18, "bold"),
             ).pack(pady=10)
 
-    def _build_source_panels(self) -> None:
+    def _build_source_panels(self, parent: tk.Widget) -> None:
         """Build the four artifact-source selection panels."""
-        container = ttk.Frame(self.root, padding=8)
+        container = ttk.Frame(parent, padding=8)
         container.pack(fill=tk.X)
 
         self._evtx_panel = ArtifactSourcePanel(
@@ -920,9 +1006,9 @@ class VeriTraceApp:  # pylint: disable=too-many-instance-attributes,too-few-publ
         )
         self._mft_panel.pack(fill=tk.X, pady=2)
 
-    def _build_controls(self) -> None:
+    def _build_controls(self, parent: tk.Widget) -> None:
         """Build the run/export/sample-data control bar and progress indicator."""
-        control_bar = ttk.Frame(self.root, padding=(8, 4))
+        control_bar = ttk.Frame(parent, padding=(8, 4))
         control_bar.pack(fill=tk.X)
 
         ttk.Button(
@@ -955,9 +1041,9 @@ class VeriTraceApp:  # pylint: disable=too-many-instance-attributes,too-few-publ
         self._progress = ttk.Progressbar(control_bar, mode="indeterminate", length=150)
         self._progress.pack(side=tk.RIGHT)
 
-    def _build_results_panel(self) -> None:
+    def _build_results_panel(self, parent: tk.Widget) -> None:
         """Build the findings Treeview and its detail pane."""
-        frame = ttk.LabelFrame(self.root, text="Findings", padding=6)
+        frame = ttk.LabelFrame(parent, text="Findings", padding=6)
         frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
 
         columns = ("severity", "rule", "description")
@@ -978,14 +1064,14 @@ class VeriTraceApp:  # pylint: disable=too-many-instance-attributes,too-few-publ
         scrollbar.pack(side=tk.LEFT, fill=tk.Y)
         self._tree.bind("<<TreeviewSelect>>", self._on_finding_selected)
 
-        detail_frame = ttk.LabelFrame(self.root, text="Finding Detail", padding=6)
+        detail_frame = ttk.LabelFrame(parent, text="Finding Detail", padding=6)
         detail_frame.pack(fill=tk.X, padx=8, pady=(0, 4))
         self._detail_text = tk.Text(detail_frame, height=5, wrap=tk.WORD, state=tk.DISABLED)
         self._detail_text.pack(fill=tk.X)
 
-    def _build_log_panel(self) -> None:
+    def _build_log_panel(self, parent: tk.Widget) -> None:
         """Build the scrolling log output panel."""
-        frame = ttk.LabelFrame(self.root, text="Log", padding=6)
+        frame = ttk.LabelFrame(parent, text="Log", padding=6)
         frame.pack(fill=tk.BOTH, expand=False, padx=8, pady=(0, 8))
         self._log_text = scrolledtext.ScrolledText(frame, height=8, state=tk.DISABLED)
         self._log_text.pack(fill=tk.BOTH, expand=True)
