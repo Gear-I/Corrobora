@@ -49,6 +49,7 @@ Command-line usage:
 from __future__ import annotations
 
 import argparse
+import itertools
 import logging
 import re
 from abc import ABC, abstractmethod
@@ -63,19 +64,28 @@ from prefetch import (
     PrefetchFileError,
     PrefetchParser,
     PrefetchRecord,
+)
+from prefetch import (
     parse_folder as parse_prefetch_folder,
 )
 from registry import RegistryFileError, RegistryHiveParser, RegistryValue
 
 logger = logging.getLogger(__name__)
 
-# Registry key path substrings commonly used for run-at-startup persistence.
-# Matched case-insensitively against a value's key_path.
-_DEFAULT_PERSISTENCE_KEY_SUBSTRINGS = (
-    "\\Run",
-    "\\RunOnce",
-    "\\RunServices",
-    "\\RunServicesOnce",
+# Registry key path SEGMENTS (i.e. an exact component between backslashes,
+# not a substring anywhere in the path) that identify a run-at-startup
+# persistence location. Matched case-insensitively.
+#
+# This must be an exact segment match, not a substring match: a naive
+# substring check for "\Run" also matches inside "\RunAs\" (the standard
+# Windows shell "Run as..." context-menu verb, present under nearly every
+# file type's Classes key -- completely unrelated to startup persistence),
+# producing a large number of false positives on any real registry hive.
+_DEFAULT_PERSISTENCE_KEY_SEGMENTS = (
+    "run",
+    "runonce",
+    "runservices",
+    "runservicesonce",
 )
 
 # EVTX Event IDs that represent process creation, used to look for
@@ -313,6 +323,13 @@ class PrefetchExecutionWithoutEvtxRule(CorrelationRule):  # pylint: disable=too-
         self._process_creation_event_ids = process_creation_event_ids
 
     def evaluate(self, context: CorrelationContext) -> list[CorrelationFinding]:
+        if not context.evtx_entries:
+            # No EVTX data was provided at all, so "no matching event
+            # found" would be true of every single Prefetch execution --
+            # this rule stays silent rather than flagging every recorded
+            # execution just because nothing was loaded to check against.
+            return []
+
         candidate_events = [
             entry
             for entry in context.evtx_entries
@@ -405,20 +422,32 @@ class RegistryPersistenceWithoutExecutionRule(
 
     def __init__(
         self,
-        persistence_key_substrings: tuple[str, ...] = _DEFAULT_PERSISTENCE_KEY_SUBSTRINGS,
+        persistence_key_segments: tuple[str, ...] = _DEFAULT_PERSISTENCE_KEY_SEGMENTS,
     ) -> None:
         """Initialize the rule.
 
         Args:
-            persistence_key_substrings: Key-path substrings (matched
-                case-insensitively) that identify a run-at-startup
+            persistence_key_segments: Key-path segment names (matched
+                case-insensitively as a full path component, e.g.
+                ``"Run"`` matches ``...\\Run\\Foo`` but not
+                ``...\\RunAs\\Foo``) that identify a run-at-startup
                 persistence location.
         """
-        self._persistence_key_substrings = tuple(
-            s.lower() for s in persistence_key_substrings
+        self._persistence_key_segments = frozenset(
+            s.lower() for s in persistence_key_segments
         )
 
     def evaluate(self, context: CorrelationContext) -> list[CorrelationFinding]:
+        if not context.prefetch_entries:
+            # No Prefetch data was provided at all, so "no execution
+            # evidence found" would be true of every single persistence
+            # entry -- including completely benign ones -- and wouldn't
+            # reflect anything about the entries themselves. Firing here
+            # would mean "we never checked," not "we checked and found
+            # nothing," so this rule stays silent rather than producing
+            # findings that carry no real information.
+            return []
+
         executed_names = {
             entry.record.executable_name.lower()
             for entry in context.prefetch_entries
@@ -455,17 +484,22 @@ class RegistryPersistenceWithoutExecutionRule(
         return findings
 
     def _is_persistence_key(self, key_path: str) -> bool:
-        """Check whether a key path matches a known persistence location.
+        """Check whether a key path contains a known persistence key segment.
+
+        Uses exact per-segment matching (splitting on backslash), not
+        substring containment -- so ``"...\\Run\\Foo"`` matches but
+        ``"...\\RunAs\\Foo"`` does not, even though the latter
+        contains ``"Run"`` as a raw substring.
 
         Args:
             key_path: The registry key path to check.
 
         Returns:
-            ``True`` if the path matches a configured persistence
-            key substring.
+            ``True`` if any path segment exactly matches (case-insensitively)
+            one of the configured persistence key segment names.
         """
-        key_path_lower = key_path.lower()
-        return any(sub in key_path_lower for sub in self._persistence_key_substrings)
+        segments = (s.lower() for s in key_path.split("\\"))
+        return any(segment in self._persistence_key_segments for segment in segments)
 
     @staticmethod
     def _extract_exe_name(value_data: object) -> str | None:
@@ -590,7 +624,7 @@ class EvtxRecordNumberGapRule(CorrelationRule):  # pylint: disable=too-few-publi
         findings: list[CorrelationFinding] = []
         minor_gaps: list[tuple[int, int, int]] = []  # (previous, current, gap_size)
 
-        for previous, current in zip(record_numbers, record_numbers[1:]):
+        for previous, current in itertools.pairwise(record_numbers):
             gap_size = current - previous - 1
             if gap_size <= 0:
                 continue
