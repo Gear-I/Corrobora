@@ -24,11 +24,11 @@ keywords = [
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
-    "Intended Audience :: DFIR",
+    "Intended Audience :: Information Technology",
     "License :: OSI Approved :: MIT License",
     "Operating System :: Microsoft :: Windows",
-    "Programming Language :: Python :: 3.12 or higher",
-    "Topic :: Digital Forensics and Incident Response",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
 ]
 
 dependencies = [
@@ -47,8 +47,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Gear-I/VeriTrace"
-Repository = "https://github.com/Gear-I/VeriTrace"
+Homepage = "https://github.com/yourusername/VeriTrace"
+Repository = "https://github.com/yourusername/VeriTrace"
 
 # --- Console entry points -----------------------------------------------
 # Lets you run e.g. `veritrace-evtx Security.evtx` from anywhere on your
