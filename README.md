@@ -42,7 +42,7 @@ built for Windows forensic artifacts specifically).
 1. Clone the repository and move into it:
 
    ```powershell
-   git clone https://github.com/yourusername/VeriTrace.git
+   git clone https://github.com/Gear-I/VeriTrace.git
    cd VeriTrace
    ```
 
