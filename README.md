@@ -39,18 +39,29 @@ signs of deliberate backdating (timestomping).
 **Requirements:** Python 3.11 or later, on Windows (VeriTrace's parsers are
 built for Windows forensic artifacts specifically).
 
-1. Open a terminal **in the project's root folder** -- the one that
+1. Clone the repository and move into it:
+
+   ```powershell
+   git clone https://github.com/yourusername/VeriTrace.git
+   cd VeriTrace
+   ```
+
+   (Already have the source some other way -- downloaded a zip,
+   already working in a local copy, etc.? Skip straight to step 2,
+   just make sure you `cd` into the folder that contains
+   `pyproject.toml`.)
+
+2. Confirm you're in the project's root folder -- the one that
    contains `pyproject.toml` directly (not inside `src/`):
 
    ```powershell
-   cd C:\path\to\VeriTrace
    dir pyproject.toml
    ```
 
    If `dir` doesn't find it, you're in the wrong folder -- fix that
    before continuing.
 
-2. Install the project in editable mode. Note the trailing `.` --
+3. Install the project in editable mode. Note the trailing `.` --
    it means "install the project defined right here"; leaving it off
    causes a `-e option requires 1 argument` error.
 
@@ -62,14 +73,14 @@ built for Windows forensic artifacts specifically).
    `python-registry`, `libscca-python`) and registers the commands
    listed below.
 
-3. Verify it installed correctly:
+4. Verify it installed correctly:
 
    ```powershell
    pip show veritrace
    ```
 
    This should print real package metadata. If it says "Package(s)
-   not found," step 2 didn't complete successfully -- scroll up in
+   not found," step 3 didn't complete successfully -- scroll up in
    its output for the actual error.
 
 | Command | What it does |
