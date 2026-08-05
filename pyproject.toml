@@ -7,7 +7,7 @@ name = "veritrace"
 version = "0.1.0"
 description = "A digital forensics framework for detecting indicators of anti-forensic activity on Windows systems through cross-artifact consistency analysis."
 readme = "README.md"
-requires-python = "<=3.12"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
     { name = "Dielle De Noon" },
