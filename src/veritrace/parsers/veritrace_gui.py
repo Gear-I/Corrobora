@@ -41,6 +41,11 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 # the local imports robust regardless of how the script is launched.
 sys.path.insert(0, str(Path(__file__).parent))
 
+from case_ingest import (  # noqa: E402 pylint: disable=wrong-import-position
+    DiscoveredArtifacts,
+    InvalidCasePathError,
+    load_case,
+)
 from correlation_engine import (  # noqa: E402 pylint: disable=wrong-import-position
     CorrelationContext,
     CorrelationEngine,
@@ -712,6 +717,23 @@ class ArtifactSourcePanel(ttk.LabelFrame):  # pylint: disable=too-many-ancestors
         """
         return list(self._listbox.get(0, tk.END))
 
+    def set_paths(self, paths: list[str], replace: bool = True) -> None:
+        """Populate the listbox with a given set of paths.
+
+        Used by case-ingest auto-discovery to fill in this panel
+        without the user manually browsing for each file.
+
+        Args:
+            paths: The paths to display.
+            replace: If ``True`` (the default), any existing entries
+                are cleared first. If ``False``, ``paths`` are
+                appended to the existing list.
+        """
+        if replace:
+            self._clear()
+        for path in paths:
+            self._listbox.insert(tk.END, path)
+
     def _add_files(self) -> None:
         """Open a file picker and add the chosen files to the list."""
         selected = filedialog.askopenfilenames(
@@ -902,6 +924,13 @@ class VeriTraceApp:  # pylint: disable=too-many-instance-attributes,too-few-publ
         """Build the run/export/sample-data control bar and progress indicator."""
         control_bar = ttk.Frame(self.root, padding=(8, 4))
         control_bar.pack(fill=tk.X)
+
+        ttk.Button(
+            control_bar, text="Load Case Folder...", command=self._load_case_folder
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(
+            control_bar, text="Load Case ZIP...", command=self._load_case_zip
+        ).pack(side=tk.LEFT, padx=(0, 6))
 
         self._run_button = ttk.Button(
             control_bar, text="Run Analysis", command=self._start_analysis
@@ -1135,6 +1164,74 @@ class VeriTraceApp:  # pylint: disable=too-many-instance-attributes,too-few-publ
         self._log_text.insert(tk.END, message + "\n")
         self._log_text.see(tk.END)
         self._log_text.configure(state=tk.DISABLED)
+
+    # -- case ingest ----------------------------------------------------------
+
+    def _load_case_folder(self) -> None:
+        """Prompt for a case folder, auto-discover artifacts, and populate panels."""
+        folder = filedialog.askdirectory(title="Select case folder")
+        if not folder:
+            return
+        self._load_case_from_path(folder)
+
+    def _load_case_zip(self) -> None:
+        """Prompt for a case .zip archive, auto-discover artifacts, and populate panels."""
+        zip_path = filedialog.askopenfilename(
+            title="Select case .zip archive", filetypes=[("Zip archives", "*.zip")]
+        )
+        if not zip_path:
+            return
+        self._load_case_from_path(zip_path)
+
+    def _load_case_from_path(self, path: str) -> None:
+        """Discover artifacts at a path and populate all four source panels.
+
+        Args:
+            path: A case folder or ``.zip`` archive path, as chosen by
+                the user.
+        """
+        self._status_label.configure(text="Scanning case...")
+        self.root.update_idletasks()
+        try:
+            artifacts = load_case(path)
+        except InvalidCasePathError as exc:
+            self._status_label.configure(text="Case scan failed.")
+            messagebox.showerror("Case scan failed", str(exc))
+            return
+
+        self._apply_discovered_artifacts(artifacts)
+
+        self._status_label.configure(
+            text=f"Loaded case: {artifacts.total_count} artifact(s) found."
+        )
+        if artifacts.total_count == 0:
+            messagebox.showwarning(
+                "No artifacts found",
+                f"No recognized EVTX, registry, Prefetch, or MFT files were found "
+                f"in:\n{path}\n\n"
+                f"({artifacts.unclassified_count} other file(s) were present but "
+                f"not recognized.)",
+            )
+
+    def _apply_discovered_artifacts(self, artifacts: DiscoveredArtifacts) -> None:
+        """Populate all four source panels from a discovery result.
+
+        Args:
+            artifacts: The artifacts discovered by :func:`load_case`.
+        """
+        self._evtx_panel.set_paths(list(artifacts.evtx_paths))
+        self._registry_panel.set_paths(list(artifacts.registry_paths))
+        self._prefetch_panel.set_paths(list(artifacts.prefetch_paths))
+        self._mft_panel.set_paths(list(artifacts.mft_paths))
+        logger.info(
+            "Case loaded: %d EVTX, %d registry, %d Prefetch, %d MFT "
+            "(%d file(s) unclassified).",
+            len(artifacts.evtx_paths),
+            len(artifacts.registry_paths),
+            len(artifacts.prefetch_paths),
+            len(artifacts.mft_paths),
+            artifacts.unclassified_count,
+        )
 
     # -- export / sample data -------------------------------------------------
 
