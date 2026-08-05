@@ -40,6 +40,12 @@ Command-line usage:
         --registry NTUSER.DAT --prefetch "C:\\Windows\\Prefetch"
 """
 
+# pylint: disable=too-many-lines
+# This module is intentionally kept as a single, self-contained file
+# (models + rules + engine + context-building + CLI) so it can be
+# dropped into a project without pulling in sibling modules beyond the
+# other VeriTrace parsers it already depends on.
+
 from __future__ import annotations
 
 import argparse
@@ -52,6 +58,7 @@ from enum import Enum
 from pathlib import Path
 
 from evtx import EventRecord, EvtxFileError, EvtxParser
+from mft import MftFileError, MftParser, MftRecord
 from prefetch import (
     PrefetchFileError,
     PrefetchParser,
@@ -186,6 +193,19 @@ class PrefetchEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class MftEntry:
+    """A single MFT record tagged with its source ``$MFT`` file.
+
+    Attributes:
+        source_path: Path to the ``$MFT`` file this record came from.
+        record: The parsed MFT record.
+    """
+
+    source_path: str
+    record: MftRecord
+
+
+@dataclass(frozen=True, slots=True)
 class CorrelationContext:
     """An in-memory bundle of parsed artifacts to run correlation rules against.
 
@@ -201,11 +221,14 @@ class CorrelationContext:
             tagged with its source hive file.
         prefetch_entries: All parsed Prefetch records, each tagged
             with its source file.
+        mft_entries: All parsed MFT records, each tagged with its
+            source file.
     """
 
     evtx_entries: tuple[EvtxEntry, ...]
     registry_value_entries: tuple[RegistryValueEntry, ...]
     prefetch_entries: tuple[PrefetchEntry, ...]
+    mft_entries: tuple[MftEntry, ...] = ()
 
 
 # --------------------------------------------------------------------------
@@ -507,22 +530,38 @@ class EvtxRecordNumberGapRule(CorrelationRule):  # pylint: disable=too-few-publi
     EVTX record numbers are assigned sequentially. A gap in the
     sequence can indicate normal log rotation/overwrite behavior, but
     can also indicate selective record wiping by an anti-forensic
-    tool. This rule reports gaps at LOW severity by default — they
-    are common and often benign — so analysts can review them without
-    being overwhelmed by false urgency.
+    tool. In practice, small (often size-1) gaps are extremely common
+    in normal Windows telemetry -- Operational/Diagnostic channels in
+    particular routinely skip record numbers for filtered or
+    unlogged event types, with no forensic significance at all.
+    Reporting every such gap as its own finding buries any genuinely
+    suspicious gap in noise and trains analysts to ignore this rule.
+
+    To keep the signal meaningful, this rule distinguishes two cases:
+
+    - Gaps at or above ``significant_gap_size`` are reported
+      individually at MEDIUM severity -- a run of several
+      consecutive missing records is much less consistent with
+      routine filtering and more worth a specific look.
+    - Smaller gaps are aggregated into a single INFO-severity summary
+      finding per source file (count, total records missing, largest
+      gap seen), so the information isn't hidden entirely but also
+      doesn't dominate the findings list.
     """
 
     rule_name = "evtx_record_number_gap"
 
-    def __init__(self, minimum_gap_size: int = 1) -> None:
+    def __init__(self, significant_gap_size: int = 10) -> None:
         """Initialize the rule.
 
         Args:
-            minimum_gap_size: The minimum number of missing record
-                numbers required to report a gap. Defaults to 1
-                (report every gap).
+            significant_gap_size: The minimum number of consecutive
+                missing record numbers required to report a gap as
+                its own individual finding. Gaps smaller than this
+                are aggregated into one summary finding per file
+                instead. Defaults to 10.
         """
-        self._minimum_gap_size = minimum_gap_size
+        self._significant_gap_size = significant_gap_size
 
     def evaluate(self, context: CorrelationContext) -> list[CorrelationFinding]:
         by_source: dict[str, list[int]] = {}
@@ -531,28 +570,141 @@ class EvtxRecordNumberGapRule(CorrelationRule):  # pylint: disable=too-few-publi
 
         findings: list[CorrelationFinding] = []
         for source_path, record_numbers in by_source.items():
-            record_numbers.sort()
-            for previous, current in zip(record_numbers, record_numbers[1:]):
-                gap_size = current - previous - 1
-                if gap_size < self._minimum_gap_size:
-                    continue
-                findings.append(
-                    CorrelationFinding(
-                        rule_name=self.rule_name,
-                        severity=Severity.LOW,
-                        description=(
-                            f"EVTX record number gap in "
-                            f"'{Path(source_path).name}': "
-                            f"{gap_size} missing record(s) between "
-                            f"#{previous} and #{current}."
-                        ),
-                        evidence=(
-                            f"EVTX source: {source_path}",
-                            f"Gap range: {previous + 1}-{current - 1}",
-                        ),
-                        source_paths=(source_path,),
-                    )
+            findings.extend(self._evaluate_source(source_path, record_numbers))
+        return findings
+
+    def _evaluate_source(
+        self, source_path: str, record_numbers: list[int]
+    ) -> list[CorrelationFinding]:
+        """Evaluate gaps within a single source file's record numbers.
+
+        Args:
+            source_path: The EVTX file these record numbers came from.
+            record_numbers: The record numbers found in that file.
+
+        Returns:
+            Individual findings for significant gaps, plus at most
+            one aggregated summary finding for smaller gaps.
+        """
+        record_numbers = sorted(record_numbers)
+        findings: list[CorrelationFinding] = []
+        minor_gaps: list[tuple[int, int, int]] = []  # (previous, current, gap_size)
+
+        for previous, current in zip(record_numbers, record_numbers[1:]):
+            gap_size = current - previous - 1
+            if gap_size <= 0:
+                continue
+            if gap_size >= self._significant_gap_size:
+                findings.append(self._build_significant_finding(source_path, previous, current))
+            else:
+                minor_gaps.append((previous, current, gap_size))
+
+        if minor_gaps:
+            findings.append(self._build_summary_finding(source_path, minor_gaps))
+        return findings
+
+    def _build_significant_finding(
+        self, source_path: str, previous: int, current: int
+    ) -> CorrelationFinding:
+        """Build an individual finding for a single significant gap.
+
+        Args:
+            source_path: The EVTX file this gap was found in.
+            previous: The record number immediately before the gap.
+            current: The record number immediately after the gap.
+
+        Returns:
+            The populated :class:`CorrelationFinding`.
+        """
+        gap_size = current - previous - 1
+        return CorrelationFinding(
+            rule_name=self.rule_name,
+            severity=Severity.MEDIUM,
+            description=(
+                f"EVTX record number gap in '{Path(source_path).name}': "
+                f"{gap_size} consecutive missing record(s) between "
+                f"#{previous} and #{current}. A gap this large is less "
+                f"consistent with routine channel filtering and may "
+                f"warrant a closer look."
+            ),
+            evidence=(
+                f"EVTX source: {source_path}",
+                f"Gap range: {previous + 1}-{current - 1}",
+            ),
+            source_paths=(source_path,),
+        )
+
+    def _build_summary_finding(
+        self, source_path: str, minor_gaps: list[tuple[int, int, int]]
+    ) -> CorrelationFinding:
+        """Build one aggregated finding summarizing routine small gaps.
+
+        Args:
+            source_path: The EVTX file these gaps were found in.
+            minor_gaps: The ``(previous, current, gap_size)`` tuples
+                for every gap below the significance threshold.
+
+        Returns:
+            A single INFO-severity :class:`CorrelationFinding`
+            summarizing all minor gaps in this file.
+        """
+        total_missing = sum(gap_size for _, _, gap_size in minor_gaps)
+        largest = max(gap_size for _, _, gap_size in minor_gaps)
+        return CorrelationFinding(
+            rule_name=self.rule_name,
+            severity=Severity.INFO,
+            description=(
+                f"EVTX record number gaps in '{Path(source_path).name}': "
+                f"{len(minor_gaps)} small gap(s) totaling {total_missing} "
+                f"missing record(s) (largest single gap: {largest}). "
+                f"Small, scattered gaps like this are common in "
+                f"Operational/Diagnostic channels and are usually routine "
+                f"log behavior rather than tampering."
+            ),
+            evidence=tuple(
+                f"Gap range: {previous + 1}-{current - 1} ({gap_size} missing)"
+                for previous, current, gap_size in minor_gaps[:10]
+            )
+            + ((f"... and {len(minor_gaps) - 10} more",) if len(minor_gaps) > 10 else ()),
+            source_paths=(source_path,),
+        )
+
+
+class MftTimestompingRule(CorrelationRule):  # pylint: disable=too-few-public-methods
+    """Flags MFT records with $STANDARD_INFORMATION/$FILE_NAME timestamp anomalies.
+
+    Surfaces the single-artifact timestomping detection already
+    performed by ``mft.py`` (see
+    :attr:`mft.MftRecord.likely_timestomped`) as a correlation
+    finding, so it appears alongside cross-artifact findings in one
+    unified report rather than requiring a separate MFT-specific
+    workflow.
+    """
+
+    rule_name = "mft_timestomping_detected"
+
+    def evaluate(self, context: CorrelationContext) -> list[CorrelationFinding]:
+        findings: list[CorrelationFinding] = []
+        for entry in context.mft_entries:
+            record = entry.record
+            if not record.likely_timestomped:
+                continue
+            findings.append(
+                CorrelationFinding(
+                    rule_name=self.rule_name,
+                    severity=Severity.HIGH,
+                    description=(
+                        f"MFT record #{record.record_number} "
+                        f"('{record.filename}') has $STANDARD_INFORMATION "
+                        f"timestamp(s) that predate its $FILE_NAME creation "
+                        f"time -- indicating timestomping."
+                    ),
+                    evidence=(
+                        f"Anomalous fields: {', '.join(record.timestamp_anomalies)}",
+                    ),
+                    source_paths=(entry.source_path,),
                 )
+            )
         return findings
 
 
@@ -561,6 +713,7 @@ DEFAULT_RULES: tuple[CorrelationRule, ...] = (
     RegistryPersistenceWithoutExecutionRule(),
     PrefetchFilenameHashMismatchRule(),
     EvtxRecordNumberGapRule(),
+    MftTimestompingRule(),
 )
 
 
@@ -736,19 +889,44 @@ def load_prefetch_entries(paths: list[str | Path]) -> list[PrefetchEntry]:
     return entries
 
 
+def load_mft_entries(paths: list[str | Path]) -> list[MftEntry]:
+    """Parse raw ``$MFT`` files and tag each record with its source path.
+
+    Files that fail to open entirely are logged and skipped, matching
+    the resilience philosophy of ``mft.py``.
+
+    Args:
+        paths: Paths to raw ``$MFT`` files.
+
+    Returns:
+        All successfully extracted records, tagged with source.
+    """
+    entries: list[MftEntry] = []
+    for path in paths:
+        parser = MftParser(path)
+        try:
+            records = parser.parse()
+        except MftFileError as exc:
+            logger.error("Skipping MFT file '%s': %s", path, exc)
+            continue
+        entries.extend(MftEntry(source_path=str(path), record=r) for r in records)
+    return entries
+
+
 def build_context(
     evtx_paths: list[str | Path] | None = None,
     registry_paths: list[str | Path] | None = None,
     prefetch_paths: list[str | Path] | None = None,
+    mft_paths: list[str | Path] | None = None,
 ) -> CorrelationContext:
     """Parse the given source files and build a :class:`CorrelationContext`.
 
     This is a convenience wrapper around :func:`load_evtx_entries`,
-    :func:`load_registry_value_entries`, and
-    :func:`load_prefetch_entries`. Individual file failures are
-    logged and skipped rather than raised, so a single unreadable
-    artifact does not prevent correlation from running against the
-    rest of the evidence.
+    :func:`load_registry_value_entries`, :func:`load_prefetch_entries`,
+    and :func:`load_mft_entries`. Individual file failures are logged
+    and skipped rather than raised, so a single unreadable artifact
+    does not prevent correlation from running against the rest of
+    the evidence.
 
     Args:
         evtx_paths: Paths to ``.evtx`` files. Defaults to none.
@@ -756,6 +934,7 @@ def build_context(
             none.
         prefetch_paths: Paths to ``.pf`` files and/or folders of
             ``.pf`` files. Defaults to none.
+        mft_paths: Paths to raw ``$MFT`` files. Defaults to none.
 
     Returns:
         The populated :class:`CorrelationContext`.
@@ -764,6 +943,7 @@ def build_context(
         evtx_entries=tuple(load_evtx_entries(evtx_paths or [])),
         registry_value_entries=tuple(load_registry_value_entries(registry_paths or [])),
         prefetch_entries=tuple(load_prefetch_entries(prefetch_paths or [])),
+        mft_entries=tuple(load_mft_entries(mft_paths or [])),
     )
 
 
@@ -778,10 +958,12 @@ def _main() -> None:
     Usage:
         python correlation_engine.py --evtx FILE [FILE ...]
             --registry FILE [FILE ...] --prefetch PATH [PATH ...]
+            --mft FILE [FILE ...]
 
-    Any of ``--evtx``, ``--registry``, or ``--prefetch`` may be
-    omitted if that artifact type isn't available; rules that depend
-    on missing artifact types simply won't find anything to flag.
+    Any of ``--evtx``, ``--registry``, ``--prefetch``, or ``--mft``
+    may be omitted if that artifact type isn't available; rules that
+    depend on missing artifact types simply won't find anything to
+    flag.
     """
     logging.basicConfig(
         level=logging.INFO,
@@ -790,7 +972,7 @@ def _main() -> None:
 
     parser = argparse.ArgumentParser(
         prog="correlation_engine.py",
-        description="Cross-reference EVTX, Registry, and Prefetch artifacts "
+        description="Cross-reference EVTX, Registry, Prefetch, and MFT artifacts "
         "to surface anti-forensic indicators.",
     )
     parser.add_argument("--evtx", nargs="*", default=[], metavar="FILE", help=".evtx file(s).")
@@ -804,19 +986,29 @@ def _main() -> None:
         metavar="PATH",
         help=".pf file(s) and/or folder(s) of .pf files.",
     )
+    parser.add_argument(
+        "--mft", nargs="*", default=[], metavar="FILE", help="Raw $MFT file(s)."
+    )
     args = parser.parse_args()
 
-    if not (args.evtx or args.registry or args.prefetch):
-        parser.error("At least one of --evtx, --registry, or --prefetch is required.")
+    if not (args.evtx or args.registry or args.prefetch or args.mft):
+        parser.error(
+            "At least one of --evtx, --registry, --prefetch, or --mft is required."
+        )
 
     context = build_context(
-        evtx_paths=args.evtx, registry_paths=args.registry, prefetch_paths=args.prefetch
+        evtx_paths=args.evtx,
+        registry_paths=args.registry,
+        prefetch_paths=args.prefetch,
+        mft_paths=args.mft,
     )
     logger.info(
-        "Loaded %d EVTX record(s), %d registry value(s), %d Prefetch record(s).",
+        "Loaded %d EVTX record(s), %d registry value(s), %d Prefetch record(s), "
+        "%d MFT record(s).",
         len(context.evtx_entries),
         len(context.registry_value_entries),
         len(context.prefetch_entries),
+        len(context.mft_entries),
     )
 
     engine = CorrelationEngine()
