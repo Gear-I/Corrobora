@@ -1,8 +1,8 @@
-"""VeriTrace Prefetch Parser — single-file module.
+"""Corrobora Prefetch Parser — single-file module.
 
 Parses Windows Prefetch (``.pf``) files into structured, immutable
 ``PrefetchRecord`` objects for use in cross-artifact consistency
-analysis within the VeriTrace digital forensics framework.
+analysis within the Corrobora digital forensics framework.
 
 Prefetch files are one of the strongest "did this program actually
 run" artifacts on Windows: each ``.pf`` file records an executable's
@@ -513,7 +513,7 @@ class PrefetchParser:  # pylint: disable=too-few-public-methods
     extraction failures (e.g. a damaged volume information
     sub-structure) are captured in :attr:`parse_failures` rather than
     discarding the whole file, consistent with the resilience
-    philosophy used throughout VeriTrace's parsers.
+    philosophy used throughout Corrobora's parsers.
 
     Attributes:
         file_path: The path to the ``.pf`` file being parsed.
@@ -571,7 +571,7 @@ class PrefetchParser:  # pylint: disable=too-few-public-methods
         except Exception as exc:  # noqa: BLE001 pylint: disable=broad-exception-caught
             # Deliberately broad: pyscca raises generic exceptions for
             # structural corruption, and we want a single, consistent
-            # VeriTrace exception type at this boundary regardless of the
+            # Corrobora exception type at this boundary regardless of the
             # underlying library's specific error type.
             raise PrefetchFileError(
                 f"Failed to open Prefetch file '{self.file_path}': {exc}"

@@ -1,9 +1,9 @@
-"""VeriTrace Correlation Engine — single-file module.
+"""Corrobora Correlation Engine — single-file module.
 
 Cross-references parsed EVTX, Registry, and Prefetch artifacts to
 surface indicators of anti-forensic activity that no single artifact
 reveals on its own. This is the core analytical layer of the
-VeriTrace digital forensics framework: individual parsers extract
+Corrobora digital forensics framework: individual parsers extract
 data faithfully, but tampering is often only visible as a
 *disagreement* between two independent sources of evidence — e.g. a
 program with Prefetch evidence of execution but no corresponding
@@ -19,7 +19,7 @@ Design:
     forensic image files. This module intentionally contains no AI
     or machine learning; every rule is deterministic and explainable.
 
-This module is self-contained but depends on VeriTrace's other
+This module is self-contained but depends on Corrobora's other
 single-file parser modules (``evtx.py``, ``registry.py``,
 ``prefetch.py``) being importable from the same location.
 
@@ -44,7 +44,7 @@ Command-line usage:
 # This module is intentionally kept as a single, self-contained file
 # (models + rules + engine + context-building + CLI) so it can be
 # dropped into a project without pulling in sibling modules beyond the
-# other VeriTrace parsers it already depends on.
+# other Corrobora parsers it already depends on.
 
 from __future__ import annotations
 
@@ -111,7 +111,7 @@ class ContextBuildError(CorrelationError):
 
     This is intentionally not raised for individual file failures
     during context building (those are logged and skipped, matching
-    the resilience philosophy used throughout VeriTrace's parsers) —
+    the resilience philosophy used throughout Corrobora's parsers) —
     only for structural problems, such as an invalid source path.
     """
 
@@ -296,7 +296,7 @@ class PrefetchExecutionWithoutEvtxRule(CorrelationRule):  # pylint: disable=too-
     Note:
         Matching relies on a substring search of the executable name
         within each EVTX record's concatenated ``message`` field,
-        since VeriTrace's EVTX parser does not structurally parse
+        since Corrobora's EVTX parser does not structurally parse
         named EventData fields (see ``evtx.py``). This is a
         deliberate, documented limitation: it will not catch cases
         where the process name appears only in an unparsed/binary
@@ -768,7 +768,7 @@ class CorrelationEngine:  # pylint: disable=too-few-public-methods
     Each rule is run in isolation: if one rule raises an unexpected
     exception, it is logged and skipped so the remaining rules still
     run, consistent with the resilience philosophy used throughout
-    VeriTrace's parsers.
+    Corrobora's parsers.
 
     Attributes:
         rules: The rules this engine will run, in order.
