@@ -1,4 +1,4 @@
-"""VeriTrace MFT Parser — single-file module.
+"""Corrobora MFT Parser — single-file module.
 
 Parses a raw NTFS Master File Table (``$MFT``) file into structured,
 immutable ``MftRecord`` objects, with built-in detection of
@@ -693,7 +693,7 @@ class MftParser:  # pylint: disable=too-few-public-methods
     fixup verification failure), the failure is logged and recorded
     in :attr:`parse_failures`, and parsing continues with the next
     record — consistent with the resilience philosophy used
-    throughout VeriTrace's parsers. Never-allocated record slots
+    throughout Corrobora's parsers. Never-allocated record slots
     (all-zero bytes) are silently skipped, since they are normal and
     not evidence of anything.
 
