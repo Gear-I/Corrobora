@@ -1,4 +1,4 @@
-![Corrobora Logo](docs/Logo_Icon/Corrobora_logo_Icon.png)
+![Corrobora Logo](docs/Logo_Icon/Corrobora_logo.png)
 
 # Corrobora
 
