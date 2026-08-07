@@ -63,7 +63,7 @@ _SEVERITY_COLORS: dict[Severity, str] = {
     Severity.INFO: "#566573",
 }
 
-_WINDOW_TITLE = "Corrobora -- Anti-Forensic Correlation Analysis"
+_WINDOW_TITLE = "Corrobora -- Cross-Artifact Validation Framework"
 _WINDOW_SIZE = "1150x870"
 
 
@@ -614,7 +614,7 @@ _LOGO_BANNER_PNG_B64 = (
     "VRl3/QpPfXIexZ1zWbiC5oy/65Z5LUFf0yXUpyIG5udLamHu565DxzZze4GkJOnz3KHN1bYuCrs+wFOwcd4b54eb"
     "+UaEv6u1uXfN5dK8jYSPaVr1KQb4P4wLAAD/HyjIH+ItZaheAAAAAElFTkSuQmCC"
 )
- 
+
 _LOGO_ICON_PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAHm0lEQVR4nO1Ya2wU1xX+zrl3dr3rxfbaPGzHYOqC"
     "eQRicBJoooCKCBi1lNhJVR5p1SYNVRu1P6oGAkGVmvzpn1REqaKolaLSSolUUVFSoQRIG6USVlqSqAkGIReqtCQF"
