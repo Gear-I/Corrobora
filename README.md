@@ -1,12 +1,12 @@
-![VeriTrace Logo](docs/Logo_Icon/VeriTrace_logo_Icon.png)
+![Corrobora Logo](docs/Logo_Icon/Corrobora_logo_Icon.png)
 
-# VeriTrace
+# Corrobora
 
-VeriTrace is a Python-based digital forensics framework for detecting
+Corrobora is a Python-based digital forensics framework for detecting
 indicators of anti-forensic activity on Windows systems through
 cross-artifact consistency analysis.
 
-Rather than parsing a single artifact type in isolation, VeriTrace
+Rather than parsing a single artifact type in isolation, Corrobora
 cross-references independent evidence sources -- Windows Event Logs
 (EVTX), the Registry, Prefetch, and the NTFS Master File Table (MFT)
 -- to surface disagreements between them that a single artifact alone
@@ -36,14 +36,14 @@ signs of deliberate backdating (timestomping).
 
 ## Installation
 
-**Requirements:** Python 3.11 or later, on Windows (VeriTrace's parsers are
+**Requirements:** Python 3.11 or later, on Windows (Corrobora's parsers are
 built for Windows forensic artifacts specifically).
 
 1. Clone the repository and move into it:
 
    ```powershell
-   git clone https://github.com/Gear-I/VeriTrace.git
-   cd VeriTrace
+   git clone https://github.com/Gear-I/Corrobora.git
+   cd Corrobora
    ```
 
    (Already have the source some other way -- downloaded a zip,
@@ -69,14 +69,14 @@ built for Windows forensic artifacts specifically).
    pip install -e .
    ```
 
-   This installs VeriTrace's dependencies (`python-evtx`,
+   This installs Corrobora's dependencies (`python-evtx`,
    `python-registry`, `libscca-python`) and registers the commands
    listed below.
 
 4. Verify it installed correctly:
 
    ```powershell
-   pip show veritrace
+   pip show Corrobora
    ```
 
    This should print real package metadata. If it says "Package(s)
@@ -85,13 +85,13 @@ built for Windows forensic artifacts specifically).
 
 | Command | What it does |
 |---|---|
-| `veritrace-evtx` | Parse `.evtx` file(s) or a folder of them |
-| `veritrace-registry` | Parse a registry hive file |
-| `veritrace-prefetch` | Parse `.pf` file(s) or a folder of them |
-| `veritrace-mft` | Parse a raw `$MFT` file and detect timestomping |
-| `veritrace-correlate` | Run the full cross-artifact correlation engine |
-| `veritrace-case` | Auto-discover artifacts in a case folder or `.zip` |
-| `veritrace-gui` | Launch the desktop GUI |
+| `Corrobora-evtx` | Parse `.evtx` file(s) or a folder of them |
+| `Corrobora-registry` | Parse a registry hive file |
+| `Corrobora-prefetch` | Parse `.pf` file(s) or a folder of them |
+| `Corrobora-mft` | Parse a raw `$MFT` file and detect timestomping |
+| `Corrobora-correlate` | Run the full cross-artifact correlation engine |
+| `Corrobora-case` | Auto-discover artifacts in a case folder or `.zip` |
+| `Corrobora-gui` | Launch the desktop GUI |
 
 For development (running the test suite and linters):
 
@@ -108,7 +108,7 @@ pip install -e ".[progress]"
 ### Running commands from any folder
 
 By default, the commands above only work while your terminal is in
-the same environment pip installed into. To run e.g. `veritrace-gui`
+the same environment pip installed into. To run e.g. `Corrobora-gui`
 from anywhere:
 
 1. Find where pip put the scripts:
@@ -125,7 +125,7 @@ from anywhere:
    already-open ones) and confirm:
 
    ```powershell
-   where veritrace-gui
+   where Corrobora-gui
    ```
 
    This should print a real path. If you installed into a virtual
@@ -149,20 +149,20 @@ If `pip install -e .` fails with something like
 
 ```bash
 # Parse a single EVTX file
-veritrace-evtx Security.evtx
+Corrobora-evtx Security.evtx
 
 # Parse every .evtx file in a folder, with a progress bar
-veritrace-evtx "C:\Windows\System32\winevt\Logs" --progress
+Corrobora-evtx "C:\Windows\System32\winevt\Logs" --progress
 
 # Run full cross-artifact correlation
-veritrace-correlate --evtx Security.evtx --registry NTUSER.DAT \
+Corrobora-correlate --evtx Security.evtx --registry NTUSER.DAT \
     --prefetch "C:\Windows\Prefetch" --mft C_MFT
 
 # Auto-discover artifacts in a case folder or zip, then analyze
-veritrace-case "C:\triage\case001" --analyze
+Corrobora-case "C:\triage\case001" --analyze
 
 # Launch the GUI
-veritrace-gui
+Corrobora-gui
 ```
 
 ## Running tests
@@ -170,8 +170,8 @@ veritrace-gui
 ```bash
 pytest tests/ -v
 ruff check src/
-mypy src/veritrace/parsers/
-pylint src/veritrace/parsers/*.py
+mypy src/Corrobora/parsers/
+pylint src/Corrobora/parsers/*.py
 ```
 
 ## Design principles
