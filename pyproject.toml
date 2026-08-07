@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "veritrace"
+name = "corrobora"
 version = "0.1.0"
 description = "A digital forensics framework for detecting indicators of anti-forensic activity on Windows systems through cross-artifact consistency analysis."
 readme = "README.md"
@@ -47,38 +47,38 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/VeriTrace"
-Repository = "https://github.com/yourusername/VeriTrace"
+Homepage = "https://github.com/yourusername/Corrobora"
+Repository = "https://github.com/yourusername/Corrobora"
 
 # --- Console entry points -----------------------------------------------
-# Lets you run e.g. `veritrace-evtx Security.evtx` from anywhere on your
+# Lets you run e.g. `Corrobora-evtx Security.evtx` from anywhere on your
 # PATH after `pip install .`, instead of `python evtx.py Security.evtx`
 # from inside the source folder.
 [project.scripts]
-veritrace-evtx = "evtx:_main"
-veritrace-registry = "registry:_main"
-veritrace-prefetch = "prefetch:_main"
-veritrace-mft = "mft:_main"
-veritrace-correlate = "correlation_engine:_main"
-veritrace-case = "case_ingest:_main"
-veritrace-gui = "veritrace_gui:main"
+Corrobora-evtx = "evtx:_main"
+Corrobora-registry = "registry:_main"
+Corrobora-prefetch = "prefetch:_main"
+Corrobora-mft = "mft:_main"
+Corrobora-correlate = "correlation_engine:_main"
+Corrobora-case = "case_ingest:_main"
+Corrobora-gui = "Corrobora_gui:main"
 
 # --- Package layout -------------------------------------------------------
-# VeriTrace's modules import each other with bare names (e.g.
+# Corrobora's modules import each other with bare names (e.g.
 # `from evtx import EvtxParser` inside correlation_engine.py), not
-# dotted package paths (`from veritrace.parsers.evtx import ...`).
+# dotted package paths (`from Corrobora.parsers.evtx import ...`).
 # To keep those imports working exactly as-is -- and avoid another round
 # of import-path breakage after everything was hard-won working -- these
 # six files are installed as flat top-level modules rather than as a
-# nested `veritrace.parsers` package. This is a pragmatic tradeoff:
+# nested `Corrobora.parsers` package. This is a pragmatic tradeoff:
 # generic module names like `evtx` or `registry` could theoretically
 # collide with another installed package's top-level module name.
-# A follow-up refactor to a proper namespaced `veritrace.parsers.*`
+# A follow-up refactor to a proper namespaced `Corrobora.parsers.*`
 # package (with corresponding relative imports) is recommended before
 # any wider public distribution.
 [tool.setuptools]
-py-modules = ["evtx", "registry", "prefetch", "mft", "correlation_engine", "case_ingest", "veritrace_gui"]
-package-dir = { "" = "src/veritrace/parsers" }
+py-modules = ["evtx", "registry", "prefetch", "mft", "correlation_engine", "case_ingest", "Corrobora_gui"]
+package-dir = { "" = "src/Corrobora/parsers" }
 
 # --- Tooling configuration (matches what's been used throughout dev) -----
 [tool.ruff]
