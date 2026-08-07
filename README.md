@@ -1,8 +1,8 @@
 ![VeriTrace Logo](docs/Logo_Icon/VeriTrace_logo_Icon.png)
 
-# VeriTrace
+# Corrobora
 
-VeriTrace is a Python-based digital forensics framework for detecting
+Corrobora is a Python-based digital forensics framework for detecting
 indicators of anti-forensic activity on Windows systems through
 cross-artifact consistency analysis.
 
@@ -42,8 +42,8 @@ built for Windows forensic artifacts specifically).
 1. Clone the repository and move into it:
 
    ```powershell
-   git clone https://github.com/Gear-I/VeriTrace.git
-   cd VeriTrace
+   git clone https://github.com/Gear-I/Corrobora.git
+   cd Corrobora
    ```
 
    (Already have the source some other way -- downloaded a zip,
@@ -76,7 +76,7 @@ built for Windows forensic artifacts specifically).
 4. Verify it installed correctly:
 
    ```powershell
-   pip show veritrace
+   pip show Corrobora
    ```
 
    This should print real package metadata. If it says "Package(s)
