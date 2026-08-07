@@ -1,8 +1,8 @@
-"""VeriTrace EVTX Parser — single-file module.
+"""Corrobora EVTX Parser — single-file module.
 
 Parses Windows ``.evtx`` event log files into structured, immutable
 ``EventRecord`` objects for use in cross-artifact consistency analysis
-within the VeriTrace digital forensics framework.
+within the Corrobora digital forensics framework.
 
 This module is self-contained: exceptions, data models, XML
 extraction logic, and file-level orchestration all live here so the
@@ -965,7 +965,7 @@ def export_folder_to_html(
     body = "".join(sections)
 
     document = _HTML_DOCUMENT_TEMPLATE.format(
-        title=html.escape("VeriTrace EVTX Batch Report"),
+        title=html.escape("Corrobora EVTX Batch Report"),
         subtitle=html.escape(
             f"{len(results)} file(s), {total_records} total record(s)"
         ),

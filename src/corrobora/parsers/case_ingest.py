@@ -1,10 +1,10 @@
-"""VeriTrace Case Ingest -- single-file module.
+"""Corrobora Case Ingest -- single-file module.
 
 Accepts a folder (e.g. a KAPE-style triage collection) or a ``.zip``
-archive of one, recursively discovers the artifact files VeriTrace
+archive of one, recursively discovers the artifact files Corrobora
 knows how to parse within it (EVTX, registry hives, Prefetch, MFT),
 and hands them straight to the correlation engine's
-``build_context()`` -- so an analyst can point VeriTrace at "a case"
+``build_context()`` -- so an analyst can point Corrobora at "a case"
 rather than manually locating and selecting four different kinds of
 file.
 
@@ -154,12 +154,12 @@ def _classify_file(path: Path) -> str | None:
 
 
 def discover_artifacts(folder: str | Path) -> DiscoveredArtifacts:
-    """Recursively scan a folder and classify VeriTrace-recognized artifacts.
+    """Recursively scan a folder and classify Corrobora-recognized artifacts.
 
     Files that can't be classified are silently skipped (counted in
     :attr:`DiscoveredArtifacts.unclassified_count`), not treated as
     errors -- a real collection folder typically contains many files
-    VeriTrace has no parser for.
+    Corrobora has no parser for.
 
     Args:
         folder: Path to the folder to scan.
@@ -289,7 +289,7 @@ def load_case(path: str | Path) -> DiscoveredArtifacts:
         return discover_artifacts(case_path)
 
     if case_path.is_file() and case_path.suffix.lower() == ".zip":
-        temp_dir = Path(tempfile.mkdtemp(prefix="veritrace_case_"))
+        temp_dir = Path(tempfile.mkdtemp(prefix="corrobora_case_"))
         logger.info("Extracting '%s' to temporary directory '%s'", case_path, temp_dir)
         _safe_extract_zip(case_path, temp_dir)
         return discover_artifacts(temp_dir)
@@ -317,7 +317,7 @@ def _main() -> None:
 
     parser = argparse.ArgumentParser(
         prog="case_ingest.py",
-        description="Discover VeriTrace-recognized artifacts in a case folder or zip archive.",
+        description="Discover Corrobora-recognized artifacts in a case folder or zip archive.",
     )
     parser.add_argument("target", help="Path to a case folder or a .zip archive of one.")
     parser.add_argument(

@@ -1,9 +1,9 @@
-"""VeriTrace Registry Parser — single-file module.
+"""Corrobora Registry Parser — single-file module.
 
 Parses offline Windows Registry hive files (e.g. ``NTUSER.DAT``,
 ``SYSTEM``, ``SOFTWARE``, ``SAM``, ``SECURITY``, ``AmCache.hve``) into
 structured, immutable ``RegistryKey`` and ``RegistryValue`` objects for
-use in cross-artifact consistency analysis within the VeriTrace digital
+use in cross-artifact consistency analysis within the Corrobora digital
 forensics framework.
 
 This module is self-contained: exceptions, data models, value
