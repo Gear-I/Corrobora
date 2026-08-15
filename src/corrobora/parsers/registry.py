@@ -1,4 +1,4 @@
-"""Corrobora Registry Parser — single-file module.
+"""Corrobora Registry Parser module.
 
 Parses offline Windows Registry hive files (e.g. ``NTUSER.DAT``,
 ``SYSTEM``, ``SOFTWARE``, ``SAM``, ``SECURITY``, ``AmCache.hve``) into
@@ -7,14 +7,13 @@ use in cross-artifact consistency analysis within the Corrobora digital
 forensics framework.
 
 This module is self-contained: exceptions, data models, value
-extraction logic, and file-level orchestration all live here so the
-parser can be dropped into a project as a single file.
+extraction logic, and file-level orchestration all live here.
 
 Requires:
     python-registry (``pip install python-registry``)
 
 Example:
-    >>> from registry_parser import RegistryHiveParser
+    >>> from corrobora.parsers.registry import RegistryHiveParser
     >>> parser = RegistryHiveParser("NTUSER.DAT")
     >>> keys, values = parser.parse()
     >>> for key in keys:
@@ -23,6 +22,9 @@ Example:
     ...     print(value.key_path, value.name, value.data)
     >>> for failure in parser.parse_failures:
     ...     print(failure.path, failure.reason)
+
+Command-line usage:
+    corrobora-registry <hive-file> [root_path]
 """
 
 from __future__ import annotations
@@ -30,14 +32,29 @@ from __future__ import annotations
 import logging
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import ClassVar
 
 from Registry.Registry import (
     Registry,
-    RegistryKey as _RawRegistryKey,
     RegistryKeyNotFoundException,
+)
+from Registry.Registry import (
+    RegistryKey as _RawRegistryKey,
+)
+from Registry.Registry import (
     RegistryValue as _RawRegistryValue,
+)
+
+from .Base import (
+    ArtifactFileError,
+    ArtifactRecord,
+    ArtifactType,
+    BaseArtifactParser,
+)
+from .Base import (
+    ParseFailure as CommonParseFailure,
 )
 
 logger = logging.getLogger(__name__)
@@ -61,12 +78,16 @@ class RegistryParsingError(Exception):
     """
 
 
-class RegistryFileError(RegistryParsingError):
+class RegistryFileError(RegistryParsingError, ArtifactFileError):
     """Raised for file-level failures that prevent parsing from starting.
 
     Examples include a missing file, an unreadable file, or a file
     whose binary structure is so damaged that not even the hive
     header/root key can be read.
+
+    Inherits from :class:`base.ArtifactFileError` so any future
+    cross-artifact consumer can catch file-level failures from any
+    Corrobora artifact parser with a single ``except`` clause.
     """
 
 
@@ -103,7 +124,7 @@ class RegistryKey:
         name: The key's own name (the last path component).
         last_written: The UTC timestamp the key was last modified.
             Registry key timestamps are a well-known forensic
-            indicator — e.g. unexpectedly recent LastWrite times on
+            indicator -- e.g. unexpectedly recent LastWrite times on
             keys that should be static can indicate tampering.
         subkey_count: The number of immediate child subkeys.
         value_count: The number of values stored directly under this
@@ -182,7 +203,7 @@ class RegistryValueExtractor:  # pylint: disable=too-few-public-methods
 
     Note:
         This class exposes a single public entry point (``extract``)
-        — a deliberate single-responsibility design, so
+        -- a deliberate single-responsibility design, so
         ``too-few-public-methods`` is intentionally suppressed here.
 
     This class is stateless: it holds no per-hive or per-value state
@@ -215,21 +236,21 @@ class RegistryValueExtractor:  # pylint: disable=too-few-public-methods
             name = raw_value.name()
             value_type = raw_value.value_type()
             value_type_str = raw_value.value_type_str()
-        except Exception as exc:  # noqa: BLE001 - underlying parser surprise
+        except Exception as exc:
             raise ValueExtractionError(
                 f"Key '{key_path}': failed to read value metadata ({exc})"
             ) from exc
 
         try:
             data = raw_value.value()
-        except Exception as exc:  # noqa: BLE001 - underlying parser surprise
+        except Exception as exc:
             raise ValueExtractionError(
                 f"Key '{key_path}', value '{name}': failed to decode value data ({exc})"
             ) from exc
 
         try:
             raw_bytes = raw_value.raw_data()
-        except Exception as exc:  # noqa: BLE001 - underlying parser surprise
+        except Exception as exc:
             raise ValueExtractionError(
                 f"Key '{key_path}', value '{name}': failed to read raw bytes ({exc})"
             ) from exc
@@ -254,14 +275,8 @@ class RegistryValueExtractor:  # pylint: disable=too-few-public-methods
 # --------------------------------------------------------------------------
 
 
-class RegistryHiveParser:  # pylint: disable=too-few-public-methods
+class RegistryHiveParser(BaseArtifactParser):
     """Parses a Windows registry hive file into keys and values.
-
-    Note:
-        This class exposes a single public entry point (``parse``)
-        backed by several private helper methods — a deliberate
-        single-responsibility design, so
-        ``too-few-public-methods`` is intentionally suppressed here.
 
     The parser walks the key tree recursively starting from either
     the hive root or an optional scoped root path, and is resilient
@@ -289,7 +304,12 @@ class RegistryHiveParser:  # pylint: disable=too-few-public-methods
         >>> parser = RegistryHiveParser("NTUSER.DAT")
         >>> run_key = "Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run"
         >>> keys, values = parser.parse(root_path=run_key)
+
+        >>> # Or via the normalized cross-artifact interface:
+        >>> common_records = parser.parse_common()
     """
+
+    artifact_type: ClassVar[ArtifactType] = ArtifactType.REGISTRY
 
     def __init__(
         self,
@@ -307,7 +327,7 @@ class RegistryHiveParser:  # pylint: disable=too-few-public-methods
                 constructor parameter allows a mock/stub extractor to
                 be injected in unit tests.
         """
-        self.file_path = Path(file_path)
+        super().__init__(file_path)
         self._value_extractor = (
             value_extractor if value_extractor is not None else RegistryValueExtractor()
         )
@@ -352,7 +372,7 @@ class RegistryHiveParser:  # pylint: disable=too-few-public-methods
                 self._walk(start_key, keys, values)
         except RegistryFileError:
             raise
-        except Exception as exc:  # noqa: BLE001 - any low-level parser failure
+        except Exception as exc:
             raise RegistryFileError(
                 f"Failed to open or read hive file '{self.file_path}': {exc}"
             ) from exc
@@ -365,6 +385,91 @@ class RegistryHiveParser:  # pylint: disable=too-few-public-methods
             len(self.parse_failures),
         )
         return keys, values
+
+    def parse_common(self) -> list[ArtifactRecord]:
+        """Parse the hive and return normalized :class:`ArtifactRecord` objects.
+
+        Internally calls :meth:`parse` (full hive walk) and maps both
+        the resulting keys and values to normalized records,
+        fulfilling the :class:`~base.BaseArtifactParser` contract.
+        Both keys and values are included: keys carry LastWrite
+        timestamp evidence, while values carry the actual persisted
+        data.
+
+        Returns:
+            A list of normalized :class:`ArtifactRecord` objects: one
+            per successfully extracted key, followed by one per
+            successfully extracted value.
+
+        Raises:
+            RegistryFileError: If the file cannot be opened or parsed.
+        """
+        keys, values = self.parse()
+        records = [self._key_to_common_record(key) for key in keys]
+        records.extend(self._value_to_common_record(value) for value in values)
+        return records
+
+    def get_common_failures(self) -> list[CommonParseFailure]:
+        """Return this parser's failures normalized to the common shape.
+
+        Returns:
+            A list of normalized :class:`base.ParseFailure` objects,
+            derived from :attr:`parse_failures`.
+        """
+        return [
+            CommonParseFailure(identifier=f.path, reason=f.reason)
+            for f in self.parse_failures
+        ]
+
+    def _key_to_common_record(self, key: RegistryKey) -> ArtifactRecord:
+        """Convert a single :class:`RegistryKey` into an :class:`ArtifactRecord`.
+
+        Args:
+            key: The registry key to normalize.
+
+        Returns:
+            The normalized :class:`ArtifactRecord`.
+        """
+        return ArtifactRecord(
+            artifact_type=self.artifact_type,
+            source_path=str(self.file_path),
+            record_id=f"KEY:{key.path}",
+            timestamp=key.last_written,
+            summary=f"Key '{key.path}' ({key.subkey_count} subkeys, {key.value_count} values)",
+            metadata={
+                "name": key.name,
+                "subkey_count": key.subkey_count,
+                "value_count": key.value_count,
+            },
+            raw=key,
+        )
+
+    def _value_to_common_record(self, value: RegistryValue) -> ArtifactRecord:
+        """Convert a single :class:`RegistryValue` into an :class:`ArtifactRecord`.
+
+        Args:
+            value: The registry value to normalize.
+
+        Returns:
+            The normalized :class:`ArtifactRecord`. Registry values
+            have no timestamp of their own in the hive format, so
+            ``timestamp`` is set to ``None``; correlate against the
+            owning key's ``last_written`` time when needed.
+        """
+        display_name = value.name or "(default)"
+        return ArtifactRecord(
+            artifact_type=self.artifact_type,
+            source_path=str(self.file_path),
+            record_id=f"VALUE:{value.key_path}\\{display_name}",
+            timestamp=None,
+            summary=f"Value '{display_name}' ({value.value_type_str}) under '{value.key_path}'",
+            metadata={
+                "value_type": value.value_type,
+                "value_type_str": value.value_type_str,
+                "data": value.data,
+            },
+            raw=value,
+        )
 
     def _resolve_start_key(
         self, registry: Registry, root_path: str | None
@@ -386,7 +491,7 @@ class RegistryHiveParser:  # pylint: disable=too-few-public-methods
         """
         try:
             root_key = registry.root()
-        except Exception as exc:  # noqa: BLE001 - underlying parser failure
+        except Exception as exc:
             raise RegistryFileError(
                 f"Failed to read root key of hive '{self.file_path}': {exc}"
             ) from exc
@@ -478,7 +583,7 @@ class RegistryHiveParser:  # pylint: disable=too-few-public-methods
             last_written = self._normalize_timestamp(raw_key.timestamp())
             subkey_count = raw_key.subkeys_number()
             value_count = raw_key.values_number()
-        except Exception as exc:  # noqa: BLE001 - underlying parser surprise
+        except Exception as exc:
             raise KeyExtractionError(
                 f"Key '{key_path}': failed to read key metadata ({exc})"
             ) from exc
@@ -550,8 +655,8 @@ class RegistryHiveParser:  # pylint: disable=too-few-public-methods
         if raw_timestamp is None:
             return None
         if raw_timestamp.tzinfo is None:
-            return raw_timestamp.replace(tzinfo=timezone.utc)
-        return raw_timestamp.astimezone(timezone.utc)
+            return raw_timestamp.replace(tzinfo=UTC)
+        return raw_timestamp.astimezone(UTC)
 
     def _validate_file_path(self) -> None:
         """Validate that the configured file path is a readable hive file.
@@ -575,7 +680,7 @@ class RegistryHiveParser:  # pylint: disable=too-few-public-methods
 
 
 def _main() -> None:
-    """Run the parser as a script: ``python registry_parser.py <hive-file> [root_path]``."""
+    """Run the parser as a script: ``corrobora-registry <hive-file> [root_path]``."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
