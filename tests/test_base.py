@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from corrobora.parsers.base import (
+from corrobora.parsers.Base import (
     ArtifactRecord,
     ArtifactType,
     BaseArtifactParser,
