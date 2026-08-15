@@ -1,18 +1,18 @@
-"""Corrobora MFT Parser — single-file module.
+"""Corrobora MFT Parser module.
 
 Parses a raw NTFS Master File Table (``$MFT``) file into structured,
 immutable ``MftRecord`` objects, with built-in detection of
-**timestomping** — one of the most direct anti-forensic techniques
+**timestomping** -- one of the most direct anti-forensic techniques
 that exists on Windows.
 
 Background:
     NTFS stores two independent sets of timestamps for every file:
 
-    - ``$STANDARD_INFORMATION`` (SI) — the timestamps Windows Explorer,
+    - ``$STANDARD_INFORMATION`` (SI) -- the timestamps Windows Explorer,
       PowerShell, and most tools display. Trivially rewritten by
       common "timestomping" utilities to make a malicious file look
       old/benign.
-    - ``$FILE_NAME`` (FN) — timestamps stored in the directory index
+    - ``$FILE_NAME`` (FN) -- timestamps stored in the directory index
       entry. Ordinary user-mode tools do not update or forge these;
       doing so requires direct manipulation of NTFS metadata
       structures, which is far less common and far more detectable.
@@ -21,7 +21,7 @@ Background:
     equal to its FN timestamps at creation and only move *forward*
     from there (as the file is modified/accessed). An SI timestamp
     that is *earlier* than the file's FN creation time is not
-    achievable through normal filesystem activity — it is a strong,
+    achievable through normal filesystem activity -- it is a strong,
     well-established indicator that SI was deliberately backdated.
     This module flags exactly that condition.
 
@@ -29,7 +29,7 @@ This module has no third-party dependencies: the MFT record binary
 format is parsed directly from the raw ``$MFT`` file using the
 standard library only, including verification and application of
 NTFS's per-sector "fixup" (update sequence array) mechanism, which
-also lets it flag structurally corrupted records — themselves a
+also lets it flag structurally corrupted records -- themselves a
 possible sign of tampering.
 
 This module is self-contained: exceptions, data models, extraction
@@ -37,7 +37,7 @@ logic, and file-level orchestration all live here so the parser can
 be dropped into a project as a single file.
 
 Example:
-    >>> from mft import MftParser
+    >>> from corrobora.parsers.mft import MftParser
     >>> parser = MftParser("C_MFT")
     >>> records = parser.parse()
     >>> for record in records:
@@ -45,15 +45,26 @@ Example:
     ...         print(record.record_number, record.filename, record.timestamp_anomalies)
 
 Command-line usage:
-    python mft.py <path-to-$MFT-file> [--record-size 1024]
+    corrobora-mft <path-to-$MFT-file> [--record-size 1024]
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import ClassVar
+
+from .Base import (
+    ArtifactFileError,
+    ArtifactRecord,
+    ArtifactType,
+    BaseArtifactParser,
+)
+from .Base import (
+    ParseFailure as CommonParseFailure,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +82,7 @@ _ATTR_TYPE_END_MARKER = 0xFFFFFFFF
 # attributes exist (hard links / long+short name pairs).
 _FILENAME_NAMESPACE_PREFERENCE = (1, 3, 0, 2)
 
-_WINDOWS_FILETIME_EPOCH = datetime(1601, 1, 1, tzinfo=timezone.utc)
+_WINDOWS_FILETIME_EPOCH = datetime(1601, 1, 1, tzinfo=UTC)
 
 # Tolerance for SI-vs-FN timestamp comparison, to absorb filesystem
 # timestamp rounding/precision differences rather than flagging noise.
@@ -92,11 +103,15 @@ class MftParsingError(Exception):
     """
 
 
-class MftFileError(MftParsingError):
+class MftFileError(MftParsingError, ArtifactFileError):
     """Raised for file-level failures that prevent parsing from starting.
 
     Examples include a missing file, an unreadable file, or a file
     that is not a plausible size for the configured record size.
+
+    Inherits from :class:`base.ArtifactFileError` so any future
+    cross-artifact consumer can catch file-level failures from any
+    Corrobora artifact parser with a single ``except`` clause.
     """
 
 
@@ -108,7 +123,7 @@ class RecordExtractionError(MftParsingError):
     than aborting the entire ``$MFT`` file. Causes include a
     ``BAAD`` signature (NTFS's own corruption marker), an unexpected
     signature, or a fixup (update sequence array) verification
-    failure — the latter meaning the record's on-disk content does
+    failure -- the latter meaning the record's on-disk content does
     not match what NTFS itself expects, which is itself a corruption
     or tampering indicator worth surfacing rather than silently
     guessing at the "real" bytes.
@@ -211,7 +226,7 @@ class ParseFailure:
     can indicate deliberate MFT corruption or slack-space wiping,
     distinct from the normal, sparse "never allocated" slots found
     throughout any ``$MFT`` file (which are not treated as failures
-    at all — see :class:`MftRecordExtractor`).
+    at all -- see :class:`MftRecordExtractor`).
 
     Attributes:
         record_number: The 0-indexed position of the record that
@@ -233,7 +248,7 @@ class MftRecordExtractor:  # pylint: disable=too-few-public-methods
 
     Note:
         This class exposes a single public entry point (``extract``)
-        backed by several private helper methods — a deliberate
+        backed by several private helper methods -- a deliberate
         single-responsibility design, so
         ``too-few-public-methods`` is intentionally suppressed here.
 
@@ -639,7 +654,7 @@ class MftRecordExtractor:  # pylint: disable=too-few-public-methods
         earlier than the file's ``$FILE_NAME`` creation time, since
         SI is initialized equal to FN at creation and only advances
         from there. An SI value earlier than FN creation (beyond the
-        comparison tolerance) means SI was set backward — i.e.
+        comparison tolerance) means SI was set backward -- i.e.
         deliberately forged.
 
         Args:
@@ -679,20 +694,14 @@ class MftRecordExtractor:  # pylint: disable=too-few-public-methods
 # --------------------------------------------------------------------------
 
 
-class MftParser:  # pylint: disable=too-few-public-methods
+class MftParser(BaseArtifactParser):
     """Parses a raw NTFS ``$MFT`` file into a list of :class:`MftRecord` objects.
-
-    Note:
-        This class exposes a single public entry point (``parse``)
-        backed by several private helper methods — a deliberate
-        single-responsibility design, so
-        ``too-few-public-methods`` is intentionally suppressed here.
 
     The parser is resilient to per-record corruption: if an
     individual record cannot be read (e.g. a ``BAAD`` signature or a
     fixup verification failure), the failure is logged and recorded
     in :attr:`parse_failures`, and parsing continues with the next
-    record — consistent with the resilience philosophy used
+    record -- consistent with the resilience philosophy used
     throughout Corrobora's parsers. Never-allocated record slots
     (all-zero bytes) are silently skipped, since they are normal and
     not evidence of anything.
@@ -710,7 +719,12 @@ class MftParser:  # pylint: disable=too-few-public-methods
         >>> parser = MftParser("C_MFT")
         >>> records = parser.parse()
         >>> timestomped = [r for r in records if r.likely_timestomped]
+
+        >>> # Or via the normalized cross-artifact interface:
+        >>> common_records = parser.parse_common()
     """
+
+    artifact_type: ClassVar[ArtifactType] = ArtifactType.MFT
 
     def __init__(
         self,
@@ -732,7 +746,7 @@ class MftParser:  # pylint: disable=too-few-public-methods
                 allows a mock/stub extractor to be injected in unit
                 tests.
         """
-        self.file_path = Path(file_path)
+        super().__init__(file_path)
         self.record_size = record_size
         self._extractor = extractor if extractor is not None else MftRecordExtractor()
         self.parse_failures: list[ParseFailure] = []
@@ -777,12 +791,70 @@ class MftParser:  # pylint: disable=too-few-public-methods
         )
         return records
 
+    def parse_common(self) -> list[ArtifactRecord]:
+        """Parse the file and return normalized :class:`ArtifactRecord` objects.
+
+        Internally calls :meth:`parse` and maps each resulting
+        :class:`MftRecord` to a normalized record, fulfilling the
+        :class:`~base.BaseArtifactParser` contract.
+
+        Returns:
+            A list of normalized :class:`ArtifactRecord` objects, one
+            per successfully extracted MFT record.
+
+        Raises:
+            MftFileError: If the file cannot be opened or parsed.
+        """
+        records = self.parse()
+        return [self._to_common_record(record) for record in records]
+
+    def get_common_failures(self) -> list[CommonParseFailure]:
+        """Return this parser's failures normalized to the common shape.
+
+        Returns:
+            A list of normalized :class:`base.ParseFailure` objects,
+            derived from :attr:`parse_failures`.
+        """
+        return [
+            CommonParseFailure(identifier=str(f.record_number), reason=f.reason)
+            for f in self.parse_failures
+        ]
+
+    def _to_common_record(self, record: MftRecord) -> ArtifactRecord:
+        """Convert a single :class:`MftRecord` into an :class:`ArtifactRecord`.
+
+        Args:
+            record: The MFT record to normalize.
+
+        Returns:
+            The normalized :class:`ArtifactRecord`.
+        """
+        tamper_note = " [LIKELY TIMESTOMPED]" if record.likely_timestomped else ""
+        si_creation = (
+            record.standard_information.creation_time if record.standard_information else None
+        )
+        return ArtifactRecord(
+            artifact_type=self.artifact_type,
+            source_path=str(self.file_path),
+            record_id=str(record.record_number),
+            timestamp=si_creation,
+            summary=f"MFT record #{record.record_number}: {record.filename}{tamper_note}",
+            metadata={
+                "filename": record.filename,
+                "is_directory": record.is_directory,
+                "is_allocated": record.is_allocated,
+                "likely_timestomped": record.likely_timestomped,
+                "timestamp_anomalies": record.timestamp_anomalies,
+            },
+            raw=record,
+        )
+
     def _process_record(
         self, raw_record: bytes, record_index: int, records: list[MftRecord]
     ) -> None:
         """Extract a single raw record and append it to ``records`` on success.
 
-        Never-allocated slots (all-zero bytes) are silently skipped —
+        Never-allocated slots (all-zero bytes) are silently skipped --
         this is normal and expected throughout any ``$MFT`` file, not
         a parsing failure. Failures are caught, logged, and appended
         to :attr:`parse_failures` rather than propagated, so that one
@@ -834,7 +906,7 @@ class MftParser:  # pylint: disable=too-few-public-methods
 
 
 def _main() -> None:
-    """Run the parser as a script: ``python mft.py <path-to-$MFT-file>``."""
+    """Run the parser as a script: ``corrobora-mft <path-to-$MFT-file>``."""
     import argparse  # pylint: disable=import-outside-toplevel
 
     logging.basicConfig(
@@ -867,7 +939,7 @@ def _main() -> None:
     )
     for record in flagged:
         logger.warning(
-            "TIMESTOMP SUSPECTED: record #%d '%s' — anomalous fields: %s",
+            "TIMESTOMP SUSPECTED: record #%d '%s' -- anomalous fields: %s",
             record.record_number,
             record.filename,
             ", ".join(record.timestamp_anomalies),

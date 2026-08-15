@@ -62,6 +62,7 @@ corrobora-mft = "corrobora.parsers.mft:_main"
 corrobora-correlate = "corrobora.parsers.correlation_engine:_main"
 corrobora-case = "corrobora.parsers.case_ingest:_main"
 corrobora-ez-import = "corrobora.parsers.ez_tools_import:_main"
+corrobora-ez-run = "corrobora.parsers.ez_tools_orchestrator:_main"
 corrobora-gui = "corrobora.parsers.corrobora_gui:main"
  
 # --- Package layout -------------------------------------------------------

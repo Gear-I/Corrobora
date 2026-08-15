@@ -1,4 +1,4 @@
-"""Corrobora Prefetch Parser — single-file module.
+"""Corrobora Prefetch Parser module.
 
 Parses Windows Prefetch (``.pf``) files into structured, immutable
 ``PrefetchRecord`` objects for use in cross-artifact consistency
@@ -23,17 +23,17 @@ Requires:
     the ``pyscca`` module used here.
 
 Example:
-    >>> from prefetch import PrefetchParser
+    >>> from corrobora.parsers.prefetch import PrefetchParser
     >>> parser = PrefetchParser("CALC.EXE-3EA9C6F2.pf")
     >>> record = parser.parse()
     >>> print(record.executable_name, record.run_count, record.last_run_times)
 
 Command-line usage:
     Single file:
-        python prefetch.py CALC.EXE-3EA9C6F2.pf
+        corrobora-prefetch CALC.EXE-3EA9C6F2.pf
 
     Folder of files (parses every .pf file found):
-        python prefetch.py "C:\\Windows\\Prefetch"
+        corrobora-prefetch "C:\\Windows\\Prefetch"
 """
 
 from __future__ import annotations
@@ -42,10 +42,21 @@ import logging
 import re
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import ClassVar
 
 import pyscca
+
+from .Base import (
+    ArtifactFileError,
+    ArtifactRecord,
+    ArtifactType,
+    BaseArtifactParser,
+)
+from .Base import (
+    ParseFailure as CommonParseFailure,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,12 +86,16 @@ class PrefetchParsingError(Exception):
     """
 
 
-class PrefetchFileError(PrefetchParsingError):
+class PrefetchFileError(PrefetchParsingError, ArtifactFileError):
     """Raised for file-level failures that prevent parsing from starting.
 
     Examples include a missing file, an unreadable file, an incorrect
     file extension, or a file that does not have a valid Prefetch
     (SCCA) signature.
+
+    Inherits from :class:`base.ArtifactFileError` so any future
+    cross-artifact consumer can catch file-level failures from any
+    Corrobora artifact parser with a single ``except`` clause.
     """
 
 
@@ -202,14 +217,14 @@ class PrefetchExtractor:  # pylint: disable=too-few-public-methods
 
     Note:
         This class exposes a single public entry point (``extract``)
-        backed by several private helper methods — a deliberate
+        backed by several private helper methods -- a deliberate
         single-responsibility design, so
         ``too-few-public-methods`` is intentionally suppressed here.
 
     This class is stateless: it holds no state between calls, so a
     single instance may safely be reused across multiple Prefetch
-    files. It has no dependency on file I/O itself — the caller is
-    responsible for opening and closing the ``pyscca.file`` object —
+    files. It has no dependency on file I/O itself -- the caller is
+    responsible for opening and closing the ``pyscca.file`` object --
     which makes it straightforward to unit test with mocked file
     objects instead of real ``.pf`` binary fixtures.
 
@@ -459,8 +474,8 @@ class PrefetchExtractor:  # pylint: disable=too-few-public-methods
             A timezone-aware UTC :class:`~datetime.datetime`.
         """
         if raw_timestamp.tzinfo is None:
-            return raw_timestamp.replace(tzinfo=timezone.utc)
-        return raw_timestamp.astimezone(timezone.utc)
+            return raw_timestamp.replace(tzinfo=UTC)
+        return raw_timestamp.astimezone(UTC)
 
     @staticmethod
     def _check_filename_hash(source_path: str, embedded_hash: str | None) -> bool | None:
@@ -497,14 +512,8 @@ class PrefetchExtractor:  # pylint: disable=too-few-public-methods
 # --------------------------------------------------------------------------
 
 
-class PrefetchParser:  # pylint: disable=too-few-public-methods
+class PrefetchParser(BaseArtifactParser):
     """Parses a single Windows Prefetch (``.pf``) file.
-
-    Note:
-        This class exposes a single public entry point (``parse``)
-        backed by several private helper methods — a deliberate
-        single-responsibility design, so
-        ``too-few-public-methods`` is intentionally suppressed here.
 
     Unlike EVTX or registry hives, a Prefetch file represents a
     single executable's execution history rather than a stream of
@@ -525,7 +534,12 @@ class PrefetchParser:  # pylint: disable=too-few-public-methods
         >>> record = parser.parse()
         >>> len(parser.parse_failures)
         0
+
+        >>> # Or via the normalized cross-artifact interface:
+        >>> common_records = parser.parse_common()
     """
+
+    artifact_type: ClassVar[ArtifactType] = ArtifactType.PREFETCH
 
     def __init__(
         self,
@@ -543,7 +557,7 @@ class PrefetchParser:  # pylint: disable=too-few-public-methods
                 parameter allows a mock/stub extractor to be injected
                 in unit tests.
         """
-        self.file_path = Path(file_path)
+        super().__init__(file_path)
         self._extractor = extractor if extractor is not None else PrefetchExtractor()
         self.parse_failures: list[ParseFailure] = []
 
@@ -568,7 +582,7 @@ class PrefetchParser:  # pylint: disable=too-few-public-methods
         scca_file = pyscca.file()
         try:
             scca_file.open(str(self.file_path))
-        except Exception as exc:  # noqa: BLE001 pylint: disable=broad-exception-caught
+        except Exception as exc:
             # Deliberately broad: pyscca raises generic exceptions for
             # structural corruption, and we want a single, consistent
             # Corrobora exception type at this boundary regardless of the
@@ -592,6 +606,55 @@ class PrefetchParser:  # pylint: disable=too-few-public-methods
         )
         return record
 
+    def parse_common(self) -> list[ArtifactRecord]:
+        """Parse the file and return normalized :class:`ArtifactRecord` objects.
+
+        Internally calls :meth:`parse` and maps the resulting
+        :class:`PrefetchRecord` to a normalized record, fulfilling
+        the :class:`~base.BaseArtifactParser` contract. Since a
+        Prefetch file represents a single executable's history rather
+        than a stream of records, this returns a single-element list.
+
+        Returns:
+            A list containing one normalized :class:`ArtifactRecord`.
+
+        Raises:
+            PrefetchFileError: If the file cannot be opened or parsed.
+        """
+        record = self.parse()
+        most_recent_run = record.last_run_times[0] if record.last_run_times else None
+        common_record = ArtifactRecord(
+            artifact_type=self.artifact_type,
+            source_path=str(self.file_path),
+            record_id=record.prefetch_hash or str(self.file_path),
+            timestamp=most_recent_run,
+            summary=(
+                f"{record.executable_name or 'unknown executable'} "
+                f"(run {record.run_count if record.run_count is not None else '?'} time(s))"
+            ),
+            metadata={
+                "executable_name": record.executable_name,
+                "run_count": record.run_count,
+                "filename_hash_matches": record.filename_hash_matches,
+                "last_run_times": record.last_run_times,
+                "referenced_filenames": record.referenced_filenames,
+            },
+            raw=record,
+        )
+        return [common_record]
+
+    def get_common_failures(self) -> list[CommonParseFailure]:
+        """Return this parser's failures normalized to the common shape.
+
+        Returns:
+            A list of normalized :class:`base.ParseFailure` objects,
+            derived from :attr:`parse_failures`.
+        """
+        return [
+            CommonParseFailure(identifier=f.field_group, reason=f.reason)
+            for f in self.parse_failures
+        ]
+
     def _validate_file_path(self) -> None:
         """Validate that the configured file path is a readable Prefetch file.
 
@@ -610,7 +673,7 @@ class PrefetchParser:  # pylint: disable=too-few-public-methods
             )
         try:
             has_valid_signature = pyscca.check_file_signature(str(self.file_path))
-        except Exception as exc:  # noqa: BLE001 pylint: disable=broad-exception-caught
+        except Exception as exc:
             # Deliberately broad: signature checking is a validation
             # convenience; any failure here should surface as a clear
             # PrefetchFileError rather than an opaque library exception.
@@ -774,8 +837,8 @@ def _main() -> None:
     """Run the parser as a script against either a single file or a folder.
 
     Usage:
-        python prefetch.py <path-to-file.pf>
-        python prefetch.py <path-to-folder>
+        corrobora-prefetch <path-to-file.pf>
+        corrobora-prefetch <path-to-folder>
     """
     logging.basicConfig(
         level=logging.INFO,
