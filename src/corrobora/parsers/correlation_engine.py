@@ -59,16 +59,16 @@ from enum import Enum
 from pathlib import Path
 
 from .evtx import EventRecord, EvtxFileError, EvtxParser
-from mft import MftFileError, MftParser, MftRecord
-from prefetch import (
+from .mft import MftFileError, MftParser, MftRecord
+from .prefetch import (
     PrefetchFileError,
     PrefetchParser,
     PrefetchRecord,
 )
-from prefetch import (
+from .prefetch import (
     parse_folder as parse_prefetch_folder,
 )
-from registry import RegistryFileError, RegistryHiveParser, RegistryValue
+from .registry import RegistryFileError, RegistryHiveParser, RegistryValue
 
 logger = logging.getLogger(__name__)
 
