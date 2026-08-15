@@ -51,44 +51,41 @@ Homepage = "https://github.com/yourusername/Corrobora"
 Repository = "https://github.com/yourusername/Corrobora"
 
 # --- Console entry points -----------------------------------------------
-# Lets you run e.g. `Corrobora-evtx Security.evtx` from anywhere on your
-# PATH after `pip install .`, instead of `python evtx.py Security.evtx`
-# from inside the source folder.
+# Lets you run e.g. `corrobora-evtx Security.evtx` from anywhere on your
+# PATH after `pip install .`, instead of `python -m corrobora.parsers.evtx
+# Security.evtx` from inside the source folder.
 [project.scripts]
-Corrobora-evtx = "evtx:_main"
-Corrobora-registry = "registry:_main"
-Corrobora-prefetch = "prefetch:_main"
-Corrobora-mft = "mft:_main"
-Corrobora-correlate = "correlation_engine:_main"
-Corrobora-case = "case_ingest:_main"
-Corrobora-gui = "Corrobora_gui:main"
-
+corrobora-evtx = "corrobora.parsers.evtx:_main"
+corrobora-registry = "corrobora.parsers.registry:_main"
+corrobora-prefetch = "corrobora.parsers.prefetch:_main"
+corrobora-mft = "corrobora.parsers.mft:_main"
+corrobora-correlate = "corrobora.parsers.correlation_engine:_main"
+corrobora-case = "corrobora.parsers.case_ingest:_main"
+corrobora-ez-import = "corrobora.parsers.ez_tools_import:_main"
+corrobora-ez-run = "corrobora.parsers.ez_tools_orchestrator:_main"
+corrobora-gui = "corrobora.parsers.corrobora_gui:main"
+ 
 # --- Package layout -------------------------------------------------------
-# Corrobora's modules import each other with bare names (e.g.
-# `from evtx import EvtxParser` inside correlation_engine.py), not
-# dotted package paths (`from Corrobora.parsers.evtx import ...`).
-# To keep those imports working exactly as-is -- and avoid another round
-# of import-path breakage after everything was hard-won working -- these
-# six files are installed as flat top-level modules rather than as a
-# nested `Corrobora.parsers` package. This is a pragmatic tradeoff:
-# generic module names like `evtx` or `registry` could theoretically
-# collide with another installed package's top-level module name.
-# A follow-up refactor to a proper namespaced `Corrobora.parsers.*`
-# package (with corresponding relative imports) is recommended before
-# any wider public distribution.
-[tool.setuptools]
-py-modules = ["evtx", "registry", "prefetch", "mft", "correlation_engine", "case_ingest", "Corrobora_gui"]
-package-dir = { "" = "src/Corrobora/parsers" }
-
+# Corrobora is a proper namespaced package: `corrobora.parsers.evtx`,
+# `corrobora.parsers.correlation_engine`, etc. Modules within the package
+# import each other via ordinary package-relative imports (e.g.
+# `from .evtx import EvtxParser` inside correlation_engine.py), so there
+# is no risk of a generic module name (`evtx`, `registry`, ...) colliding
+# with another installed package's top-level module -- everything lives
+# under the `corrobora` namespace.
+[tool.setuptools.packages.find]
+where = ["src"]
+ 
 # --- Tooling configuration (matches what's been used throughout dev) -----
 [tool.ruff]
 line-length = 100
-
+ 
 [tool.mypy]
 ignore_missing_imports = true
-
+ 
 [tool.pylint.format]
 max-line-length = 100
-
+ 
 [tool.pylint.main]
 extension-pkg-allow-list = ["pyscca"]
+ 
