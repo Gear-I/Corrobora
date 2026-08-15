@@ -58,7 +58,7 @@ from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
 
-from Evtx import EventRecord, EvtxFileError, EvtxParser
+from .evtx import EventRecord, EvtxFileError, EvtxParser
 from mft import MftFileError, MftParser, MftRecord
 from prefetch import (
     PrefetchFileError,
