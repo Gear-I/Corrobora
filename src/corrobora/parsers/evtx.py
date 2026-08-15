@@ -1,4 +1,4 @@
-"""Corrobora EVTX Parser — single-file module.
+"""Corrobora EVTX Parser module.
 
 Parses Windows ``.evtx`` event log files into structured, immutable
 ``EventRecord`` objects for use in cross-artifact consistency analysis
@@ -14,7 +14,7 @@ Requires:
     python-evtx (``pip install python-evtx``)
 
 Example:
-    >>> from evtx import EvtxParser
+    >>> from corrobora.parsers.evtx import EvtxParser
     >>> parser = EvtxParser("Security.evtx")
     >>> records = parser.parse()
     >>> for record in records:
@@ -24,10 +24,10 @@ Example:
 
 Command-line usage:
     Single file:
-        python evtx.py Security.evtx
+        corrobora-evtx Security.evtx
 
     Folder of files (parses every .evtx file found):
-        python evtx.py "C:\\path\\to\\evtx_folder"
+        corrobora-evtx "C:\\path\\to\\evtx_folder"
 """
 
 # pylint: disable=too-many-lines
@@ -45,12 +45,23 @@ import logging
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import ClassVar
 from xml.etree import ElementTree
 
 from Evtx.Evtx import Evtx
 from Evtx.Views import evtx_record_xml_view
+
+from .Base import (
+    ArtifactFileError,
+    ArtifactRecord,
+    ArtifactType,
+    BaseArtifactParser,
+)
+from .Base import (
+    ParseFailure as CommonParseFailure,
+)
 
 try:
     from tqdm import tqdm
@@ -97,12 +108,16 @@ class EvtxParsingError(Exception):
     """
 
 
-class EvtxFileError(EvtxParsingError):
+class EvtxFileError(EvtxParsingError, ArtifactFileError):
     """Raised for file-level failures that prevent parsing from starting.
 
     Examples include a missing file, an unreadable file, an incorrect
     file extension, or a file whose binary structure is so damaged
     that not even the file header can be read.
+
+    Inherits from :class:`base.ArtifactFileError` so any future
+    cross-artifact consumer can catch file-level failures from any
+    Corrobora artifact parser with a single ``except`` clause.
     """
 
 
@@ -205,7 +220,7 @@ class EventRecordExtractor:  # pylint: disable=too-few-public-methods
 
     Note:
         This class exposes a single public entry point (``extract``)
-        backed by several private helper methods — a deliberate
+        backed by several private helper methods -- a deliberate
         single-responsibility design, not a class that "should" have
         more public surface area, so ``too-few-public-methods`` is
         intentionally suppressed here.
@@ -261,7 +276,7 @@ class EventRecordExtractor:  # pylint: disable=too-few-public-methods
             message = self._extract_message(root)
         except RecordExtractionError:
             raise
-        except Exception as exc:  # noqa: BLE001 - convert any parsing surprise
+        except Exception as exc:
             raise RecordExtractionError(
                 f"Record {record_number}: unexpected extraction failure ({exc})"
             ) from exc
@@ -348,8 +363,8 @@ class EventRecordExtractor:  # pylint: disable=too-few-public-methods
             normalized = raw_value.replace("Z", "+00:00")
             parsed = datetime.fromisoformat(normalized)
             if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=timezone.utc)
-            return parsed.astimezone(timezone.utc)
+                parsed = parsed.replace(tzinfo=UTC)
+            return parsed.astimezone(UTC)
         except ValueError:
             logger.warning("Unparseable TimeCreated value: %r", raw_value)
             return None
@@ -426,14 +441,8 @@ class EventRecordExtractor:  # pylint: disable=too-few-public-methods
 # --------------------------------------------------------------------------
 
 
-class EvtxParser:  # pylint: disable=too-few-public-methods
+class EvtxParser(BaseArtifactParser):
     """Parses a Windows ``.evtx`` file into a list of :class:`EventRecord` objects.
-
-    Note:
-        This class exposes a single public entry point (``parse``)
-        backed by several private helper methods — a deliberate
-        single-responsibility design, so
-        ``too-few-public-methods`` is intentionally suppressed here.
 
     The parser is resilient to per-record corruption: if an
     individual record cannot be read or converted, the failure is
@@ -454,7 +463,12 @@ class EvtxParser:  # pylint: disable=too-few-public-methods
         >>> records = parser.parse()
         >>> len(parser.parse_failures)
         0
+
+        >>> # Or via the normalized cross-artifact interface:
+        >>> common_records = parser.parse_common()
     """
+
+    artifact_type: ClassVar[ArtifactType] = ArtifactType.EVTX
 
     def __init__(
         self,
@@ -472,7 +486,7 @@ class EvtxParser:  # pylint: disable=too-few-public-methods
                 constructor parameter allows a mock/stub extractor to
                 be injected in unit tests.
         """
-        self.file_path = Path(file_path)
+        super().__init__(file_path)
         self._extractor = extractor if extractor is not None else EventRecordExtractor()
         self.parse_failures: list[RecordParseFailure] = []
 
@@ -521,7 +535,7 @@ class EvtxParser:  # pylint: disable=too-few-public-methods
                     self._process_record(raw_record, records)
         except EvtxFileError:
             raise
-        except Exception as exc:  # noqa: BLE001 - any low-level parser failure
+        except Exception as exc:
             raise EvtxFileError(
                 f"Failed to open or read EVTX file '{self.file_path}': {exc}"
             ) from exc
@@ -533,6 +547,65 @@ class EvtxParser:  # pylint: disable=too-few-public-methods
             len(self.parse_failures),
         )
         return records
+
+    def parse_common(self) -> list[ArtifactRecord]:
+        """Parse the file and return normalized :class:`ArtifactRecord` objects.
+
+        Internally calls :meth:`parse` and maps each resulting
+        :class:`EventRecord` to a normalized record, fulfilling the
+        :class:`~base.BaseArtifactParser` contract so this parser can
+        be used polymorphically by a future cross-artifact consumer.
+
+        Returns:
+            A list of normalized :class:`ArtifactRecord` objects, one
+            per successfully extracted event.
+
+        Raises:
+            EvtxFileError: If the file cannot be opened or parsed.
+        """
+        records = self.parse()
+        return [self._to_common_record(record) for record in records]
+
+    def get_common_failures(self) -> list[CommonParseFailure]:
+        """Return this parser's failures normalized to the common shape.
+
+        Returns:
+            A list of normalized :class:`base.ParseFailure` objects,
+            derived from :attr:`parse_failures`.
+        """
+        return [
+            CommonParseFailure(
+                identifier=None if f.record_number is None else str(f.record_number),
+                reason=f.reason,
+            )
+            for f in self.parse_failures
+        ]
+
+    def _to_common_record(self, record: EventRecord) -> ArtifactRecord:
+        """Convert a single :class:`EventRecord` into an :class:`ArtifactRecord`.
+
+        Args:
+            record: The event record to normalize.
+
+        Returns:
+            The normalized :class:`ArtifactRecord`.
+        """
+        return ArtifactRecord(
+            artifact_type=self.artifact_type,
+            source_path=str(self.file_path),
+            record_id=str(record.record_number),
+            timestamp=record.timestamp,
+            summary=f"Event ID {record.event_id} ({record.provider_name or 'unknown provider'})",
+            metadata={
+                "event_id": record.event_id,
+                "provider_name": record.provider_name,
+                "computer_name": record.computer_name,
+                "channel": record.channel,
+                "level": record.level,
+                "message": record.message,
+            },
+            raw=record,
+        )
 
     @staticmethod
     def _estimate_record_count(evtx_log: Evtx) -> int | None:
@@ -1079,7 +1152,7 @@ def _main() -> None:
     """Run the parser as a script against either a single file or a folder.
 
     Usage:
-        python evtx.py <path-to-file.evtx-or-folder> [options]
+        corrobora-evtx <path-to-file.evtx-or-folder> [options]
 
     Options:
         --progress          Show a progress bar while parsing
