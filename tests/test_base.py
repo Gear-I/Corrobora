@@ -73,7 +73,7 @@ class TestMftParseCommon:
     """Tests for MftParser.parse_common() against real synthetic binary data."""
 
     def test_parse_common_returns_artifact_records(self, tmp_path: Path) -> None:
-        from mft fixtures import build_mft_record  # type: ignore[import-not-found]
+        from mft_fixtures import build_mft_record  # type: ignore[import-not-found]
 
         mft_file = tmp_path / "MFT"
         record = build_mft_record(filename="normal.exe")
@@ -89,7 +89,7 @@ class TestMftParseCommon:
         assert common_records[0].metadata["likely_timestomped"] is False
 
     def test_parse_common_flags_timestomping_in_summary(self, tmp_path: Path) -> None:
-        from mft fixtures import build_mft_record  # type: ignore[import-not-found]
+        from mft_fixtures import build_mft_record  # type: ignore[import-not-found]
 
         mft_file = tmp_path / "MFT"
         backdated = datetime(2010, 1, 1, tzinfo=UTC)
