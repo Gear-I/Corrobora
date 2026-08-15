@@ -193,6 +193,12 @@ This project is under active development. See `pyproject.toml` for a
 note on the current flat-module package layout and a planned
 namespaced-package refactor.
 
+## Project History
+
+ Corrobora was originally developed under the name **VeriTrace** as part of my master's capstone research. On August 7, 2026, the project was renamed to **Corrobora** to better reflect its mission of corroborating evidence across multiple Windows forensic artifacts and to establish a more distinctive identity within the open-source DFIR community.
+ If you encounter references to **VeriTrace** in earlier blog posts, documentation, presentations, or research materials, they refer to what is now **Corrobora**. The project's goals, architecture, and development history remain the same; only the name has changed.
+
+
 ## License
 
 MIT -- see `LICENSE`.

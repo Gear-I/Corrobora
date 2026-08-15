@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
-    { name = "Dielle De Noon" },
+    { name = "Your Name Here" },
 ]
 keywords = [
     "digital-forensics",
