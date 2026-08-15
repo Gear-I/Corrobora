@@ -1,8 +1,8 @@
-"""Corrobora: a cross-artifact validation framework for Windows forensics.
+"""Corrobora's artifact parsers and correlation engine.
 
-Corrobora detects indicators of anti-forensic activity by
-cross-referencing independent Windows evidence sources (EVTX,
-Registry, Prefetch, MFT) rather than parsing any single artifact type
-in isolation. See ``corrobora.parsers`` for the individual artifact
-parsers and the correlation engine.
+Each artifact parser (``evtx``, ``registry``, ``prefetch``, ``mft``)
+is independently importable and usable on its own. ``correlation_engine``
+cross-references their output; ``case_ingest`` auto-discovers artifact
+files in a folder or zip archive; ``corrobora_gui`` is the desktop
+interface tying everything together.
 """
