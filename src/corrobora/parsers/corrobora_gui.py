@@ -41,12 +41,12 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 # the local imports robust regardless of how the script is launched.
 sys.path.insert(0, str(Path(__file__).parent))
 
-from case_ingest import (  # pylint: disable=wrong-import-position
+from .case_ingest import (  # pylint: disable=wrong-import-position
     DiscoveredArtifacts,
     InvalidCasePathError,
     load_case,
 )
-from correlation_engine import (  # pylint: disable=wrong-import-position
+from .correlation_engine import (  # pylint: disable=wrong-import-position
     CorrelationContext,
     CorrelationEngine,
     CorrelationFinding,
