@@ -1,0 +1,18 @@
+name: Claude Code Automation
+on:
+  pull_request:
+    types: [opened, synchronize]
+  issues:
+    types: [assigned, commented]
+
+jobs:
+  claude_agent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo code
+        uses: actions/checkout@v4
+
+      - name: Run Claude Code Agent
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
