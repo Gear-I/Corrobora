@@ -85,7 +85,7 @@ _DEFAULT_TIMEOUT_SECONDS = 300
 # --------------------------------------------------------------------------
 
 
-class EzToolsOrchestratorError(EzToolsImportError):
+class EzToolsOrchestratorError(EzToolsImportError):  # pylint: disable=too-few-public-methods
     """Base exception for all errors raised by the EZ Tools orchestrator.
 
     Inherits from :class:`ez_tools_import.EzToolsImportError` so
@@ -94,7 +94,7 @@ class EzToolsOrchestratorError(EzToolsImportError):
     """
 
 
-class ExecutableNotFoundError(EzToolsOrchestratorError):
+class ExecutableNotFoundError(EzToolsOrchestratorError):  # pylint: disable=too-few-public-methods
     """Raised when the requested EZ Tool's executable cannot be found.
 
     Examples include a missing or misspelled ``tools_dir``, or an EZ
@@ -102,7 +102,7 @@ class ExecutableNotFoundError(EzToolsOrchestratorError):
     """
 
 
-class ToolExecutionError(EzToolsOrchestratorError):
+class ToolExecutionError(EzToolsOrchestratorError):  # pylint: disable=too-few-public-methods
     """Raised when an EZ Tool executable runs but fails or times out.
 
     Captures the tool's stdout/stderr in the exception message where
@@ -111,7 +111,7 @@ class ToolExecutionError(EzToolsOrchestratorError):
     """
 
 
-class UnsupportedPlatformError(EzToolsOrchestratorError):
+class UnsupportedPlatformError(EzToolsOrchestratorError):  # pylint: disable=too-few-public-methods
     """Raised when attempting to run EZ Tools on a non-Windows platform.
 
     EZ Tools are Windows/.NET executables. This is only raised for

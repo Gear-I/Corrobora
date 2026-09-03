@@ -6,6 +6,10 @@ needed, since :class:`CorrelationRule` implementations are pure
 functions of in-memory data.
 """
 
+# pylint: disable=missing-function-docstring
+# Test function names are self-descriptive; per-test docstrings would
+# just restate the name.
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -154,7 +158,7 @@ class TestPrefetchExecutionWithoutEvtxRule:
 
         findings = PrefetchExecutionWithoutEvtxRule().evaluate(context)
 
-        assert findings == []
+        assert not findings
 
     def test_does_not_flag_when_matching_evtx_event_exists(self) -> None:
         run_time = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
@@ -172,7 +176,7 @@ class TestPrefetchExecutionWithoutEvtxRule:
 
         findings = PrefetchExecutionWithoutEvtxRule().evaluate(context)
 
-        assert findings == []
+        assert not findings
 
     def test_does_not_match_event_outside_time_window(self) -> None:
         run_time = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
@@ -220,7 +224,7 @@ class TestPrefetchExecutionWithoutEvtxRule:
 
         findings = PrefetchExecutionWithoutEvtxRule().evaluate(context)
 
-        assert findings == []
+        assert not findings
 
     def test_custom_time_window_is_respected(self) -> None:
         run_time = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
@@ -239,7 +243,7 @@ class TestPrefetchExecutionWithoutEvtxRule:
         rule = PrefetchExecutionWithoutEvtxRule(time_window=timedelta(minutes=30))
         findings = rule.evaluate(context)
 
-        assert findings == []
+        assert not findings
 
 
 class TestRegistryPersistenceWithoutExecutionRule:
@@ -276,7 +280,7 @@ class TestRegistryPersistenceWithoutExecutionRule:
 
         findings = RegistryPersistenceWithoutExecutionRule().evaluate(context)
 
-        assert findings == []
+        assert not findings
 
     def test_ignores_non_persistence_keys(self) -> None:
         value = _make_registry_value(
@@ -291,7 +295,7 @@ class TestRegistryPersistenceWithoutExecutionRule:
 
         findings = RegistryPersistenceWithoutExecutionRule().evaluate(context)
 
-        assert findings == []
+        assert not findings
 
     def test_does_not_misclassify_runas_shell_verb_as_persistence(self) -> None:
         # Regression test: "\RunAs\" contains "\Run" as a raw substring,
@@ -313,7 +317,7 @@ class TestRegistryPersistenceWithoutExecutionRule:
 
         findings = RegistryPersistenceWithoutExecutionRule().evaluate(context)
 
-        assert findings == []
+        assert not findings
 
     def test_matches_run_key_as_exact_segment_not_substring(self) -> None:
         # Sanity check the fix in the other direction: a genuine "Run" key
@@ -352,7 +356,7 @@ class TestRegistryPersistenceWithoutExecutionRule:
 
         findings = RegistryPersistenceWithoutExecutionRule().evaluate(context)
 
-        assert findings == []
+        assert not findings
 
     def test_ignores_values_with_no_exe_reference(self) -> None:
         value = _make_registry_value(data="just some string, no exe")
@@ -365,7 +369,7 @@ class TestRegistryPersistenceWithoutExecutionRule:
 
         findings = RegistryPersistenceWithoutExecutionRule().evaluate(context)
 
-        assert findings == []
+        assert not findings
 
     def test_ignores_non_string_value_data(self) -> None:
         value = _make_registry_value(data=42)
@@ -378,7 +382,7 @@ class TestRegistryPersistenceWithoutExecutionRule:
 
         findings = RegistryPersistenceWithoutExecutionRule().evaluate(context)
 
-        assert findings == []
+        assert not findings
 
 
 class TestPrefetchFilenameHashMismatchRule:
@@ -407,7 +411,7 @@ class TestPrefetchFilenameHashMismatchRule:
 
         findings = PrefetchFilenameHashMismatchRule().evaluate(context)
 
-        assert findings == []
+        assert not findings
 
     def test_does_not_flag_when_unknown(self) -> None:
         prefetch = _make_prefetch(filename_hash_matches=None)
@@ -419,7 +423,7 @@ class TestPrefetchFilenameHashMismatchRule:
 
         findings = PrefetchFilenameHashMismatchRule().evaluate(context)
 
-        assert findings == []
+        assert not findings
 
 
 class TestMftTimestompingRule:
@@ -454,7 +458,7 @@ class TestMftTimestompingRule:
 
         findings = MftTimestompingRule().evaluate(context)
 
-        assert findings == []
+        assert not findings
 
     def test_default_context_has_no_mft_entries(self) -> None:
         # Confirms mft_entries defaults to empty so existing callers that
@@ -462,8 +466,8 @@ class TestMftTimestompingRule:
         context = CorrelationContext(
             evtx_entries=(), registry_value_entries=(), prefetch_entries=()
         )
-        assert context.mft_entries == ()
-        assert MftTimestompingRule().evaluate(context) == []
+        assert not context.mft_entries
+        assert not MftTimestompingRule().evaluate(context)
 
 
 class TestEvtxRecordNumberGapRule:
@@ -479,7 +483,7 @@ class TestEvtxRecordNumberGapRule:
 
         findings = EvtxRecordNumberGapRule().evaluate(context)
 
-        assert findings == []
+        assert not findings
 
     def test_small_gaps_are_aggregated_into_one_info_finding(self) -> None:
         # Simulates the real-world pattern seen in Operational/Diagnostic
@@ -598,7 +602,7 @@ class TestCorrelationEngine:
         assert findings[0].rule_name == "prefetch_filename_hash_mismatch"
 
     def test_one_broken_rule_does_not_stop_others(self) -> None:
-        class BrokenRule(CorrelationRule):  # pylint: disable=too-few-public-methods
+        class BrokenRule(CorrelationRule):  # pylint: disable=too-few-public-methods,missing-class-docstring
             rule_name = "broken_rule"
 
             def evaluate(self, context: CorrelationContext) -> list[CorrelationFinding]:
@@ -625,4 +629,4 @@ class TestCorrelationEngine:
         )
         engine = CorrelationEngine()
         findings = engine.run(context)
-        assert findings == []
+        assert not findings

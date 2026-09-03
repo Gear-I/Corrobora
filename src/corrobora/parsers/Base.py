@@ -29,6 +29,12 @@ Design rationale:
     are expected to use.
 """
 
+# pylint: disable=invalid-name
+# Module is named `Base.py` (capitalized) rather than `base.py` to avoid
+# shadowing the stdlib-adjacent convention of lowercase module names
+# colliding with common variable/parameter names (`base`) throughout the
+# codebase; kept as-is rather than renamed across ~20 importing call sites.
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

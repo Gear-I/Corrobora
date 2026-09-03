@@ -7,6 +7,12 @@ construction, exit-code/timeout/missing-output handling, executable
 discovery) rather than EZ Tools' own behavior.
 """
 
+# pylint: disable=missing-function-docstring,too-few-public-methods
+# Test function names are self-descriptive; per-test docstrings would
+# just restate the name. Several Test* grouping classes intentionally
+# hold a single test method for now -- that's normal pytest structure,
+# not a design smell.
+
 from __future__ import annotations
 
 import subprocess

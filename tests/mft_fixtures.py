@@ -49,7 +49,7 @@ def _build_si_content(
     return _ft(creation) + _ft(modification) + _ft(mft_modification) + _ft(access) + b"\x00" * 24
 
 
-def _build_fn_content(
+def _build_fn_content(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     parent_record_number: int,
     creation: datetime | None,
     modification: datetime | None,

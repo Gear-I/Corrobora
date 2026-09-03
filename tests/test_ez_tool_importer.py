@@ -6,6 +6,10 @@ guessed), so these tests exercise genuine field-mapping correctness
 rather than an assumed schema.
 """
 
+# pylint: disable=missing-function-docstring
+# Test function names are self-descriptive; per-test docstrings would
+# just restate the name.
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -116,7 +120,7 @@ class TestEzToolsCsvParserEvtxEcmd:
         assert record.metadata["source_tool"] == "EvtxECmd"
         assert record.metadata["provider_name"] == "Microsoft-Windows-Security-Auditing"
         assert record.metadata["payload_data_1"] == "ProcessID: 10672"
-        assert parser.get_common_failures() == []
+        assert not parser.get_common_failures()
 
     def test_multiple_rows(self, tmp_path: Path) -> None:
         csv_path = tmp_path / "20240408132435_EvtxECmd_Output.csv"
@@ -150,7 +154,7 @@ class TestEzToolsCsvParserEvtxEcmd:
 
         assert len(records) == 1
         assert records[0].timestamp is None
-        assert parser.get_common_failures() == []
+        assert not parser.get_common_failures()
 
     def test_raises_on_missing_file(self, tmp_path: Path) -> None:
         parser = EzToolsCsvParser(tmp_path / "20240408132435_EvtxECmd_Output.csv")

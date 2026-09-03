@@ -350,7 +350,7 @@ def _main() -> None:
     # Imported here rather than at module level so `case_ingest.py` can be
     # used purely for discovery (e.g. by the GUI) without requiring the
     # correlation engine's own dependency chain unless --analyze is used.
-    from correlation_engine import (  # pylint: disable=import-outside-toplevel
+    from .correlation_engine import (  # pylint: disable=import-outside-toplevel
         CorrelationEngine,
         Severity,
         build_context,

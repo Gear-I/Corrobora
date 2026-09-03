@@ -85,6 +85,15 @@ ignore_missing_imports = true
  
 [tool.pylint.format]
 max-line-length = 100
+
+[tool.pylint."messages control"]
+# duplicate-code (R0801) flags parallel structure that's intentional here:
+# each parser implements the same BaseArtifactParser contract with
+# similarly worded docstrings, and the MFT test fixtures intentionally
+# mirror the binary layouts built in corrobora_gui.py's sample-data
+# generator. Refactoring either into a shared helper would couple
+# unrelated modules for documentation/test-data reasons only.
+disable = ["duplicate-code"]
  
 [tool.pylint.main]
 extension-pkg-allow-list = ["pyscca"]

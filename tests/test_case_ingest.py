@@ -6,6 +6,10 @@ require valid artifact file contents, so these tests exercise real
 filesystem discovery without needing genuine forensic data.
 """
 
+# pylint: disable=missing-function-docstring
+# Test function names are self-descriptive; per-test docstrings would
+# just restate the name.
+
 from __future__ import annotations
 
 import zipfile

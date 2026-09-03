@@ -10,6 +10,12 @@ are tested with mocked underlying data, consistent with how their own
 native-API tests are written.
 """
 
+# pylint: disable=missing-function-docstring,too-few-public-methods
+# Test function names are self-descriptive; per-test docstrings would
+# just restate the name. Several Test* grouping classes intentionally
+# hold a single test method for now -- that's normal pytest structure,
+# not a design smell.
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -38,7 +44,7 @@ class TestBaseArtifactParserContract:
 
     def test_cannot_instantiate_directly(self) -> None:
         with pytest.raises(TypeError):
-            BaseArtifactParser("some_file")  # type: ignore[abstract]
+            BaseArtifactParser("some_file")  # type: ignore[abstract] # pylint: disable=abstract-class-instantiated
 
     def test_all_four_parsers_are_subclasses(self) -> None:
         for cls in (EvtxParser, RegistryHiveParser, PrefetchParser, MftParser):
@@ -73,7 +79,7 @@ class TestMftParseCommon:
     """Tests for MftParser.parse_common() against real synthetic binary data."""
 
     def test_parse_common_returns_artifact_records(self, tmp_path: Path) -> None:
-        from mft_fixtures import build_mft_record  # type: ignore[import-not-found]
+        from mft_fixtures import build_mft_record  # type: ignore[import-not-found] # pylint: disable=import-outside-toplevel
 
         mft_file = tmp_path / "MFT"
         record = build_mft_record(filename="normal.exe")
@@ -89,7 +95,7 @@ class TestMftParseCommon:
         assert common_records[0].metadata["likely_timestomped"] is False
 
     def test_parse_common_flags_timestomping_in_summary(self, tmp_path: Path) -> None:
-        from mft_fixtures import build_mft_record  # type: ignore[import-not-found]
+        from mft_fixtures import build_mft_record  # type: ignore[import-not-found] # pylint: disable=import-outside-toplevel
 
         mft_file = tmp_path / "MFT"
         backdated = datetime(2010, 1, 1, tzinfo=UTC)
@@ -208,7 +214,7 @@ class TestPrefetchParseCommon:
             volumes=(),
         )
 
-        from unittest import mock
+        from unittest import mock  # pylint: disable=import-outside-toplevel
 
         with mock.patch.object(PrefetchParser, "parse", return_value=record):
             common_records = parser.parse_common()
