@@ -8,6 +8,11 @@ on:
 jobs:
   claude_agent:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
     steps:
       - name: Check out repo code
         uses: actions/checkout@v4
