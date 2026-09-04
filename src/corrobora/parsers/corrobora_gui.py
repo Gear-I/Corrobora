@@ -1302,7 +1302,8 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         scroll_area.setWidgetResizable(True)
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(8, 0, 8, 8)
+        layout.setSpacing(10)
 
         self._build_header(layout)
         self._build_evidence_section(layout)
@@ -1334,6 +1335,16 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
 
     # -- widget construction -------------------------------------------------
 
+    _HEADER_BANNER_HEIGHT = 64
+    """Fixed display height for the header banner.
+
+    The embedded artwork's native size is much taller than a header
+    needs; left unscaled, it ate a large share of vertical space and
+    pushed the checkboxes/results below the fold on common laptop and
+    1080p-class screens, forcing more scrolling than the content
+    otherwise requires.
+    """
+
     def _build_header(self, layout: QVBoxLayout) -> None:
         """Build the branded header banner at the top of the window.
 
@@ -1360,8 +1371,11 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
             fallback.setStyleSheet("color: #4a90d9; font-size: 18pt; font-weight: bold;")
             header_layout.addWidget(fallback, alignment=Qt.AlignCenter)
         else:
+            scaled = pixmap.scaledToHeight(
+                self._HEADER_BANNER_HEIGHT, Qt.SmoothTransformation
+            )
             banner_label = QLabel()
-            banner_label.setPixmap(pixmap)
+            banner_label.setPixmap(scaled)
             header_layout.addWidget(banner_label, alignment=Qt.AlignCenter)
         layout.addWidget(header)
 
