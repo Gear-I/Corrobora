@@ -30,9 +30,10 @@ signs of deliberate backdating (timestomping).
 - **Correlation engine** -- a rule-based, fully deterministic (no AI/ML)
   engine that cross-references all four artifact types to surface
   anti-forensic indicators, ranked by severity.
-- **Desktop GUI** -- a Tkinter application for running the full
-  pipeline interactively, with live progress, sortable/filterable
-  results, and HTML export.
+- **Desktop GUI** -- a PyQt5 application for running the full pipeline
+  interactively: point it at one evidence source, choose which
+  artifact and validation-rule categories to run, and browse
+  sortable/filterable, scored results with automatic HTML export.
 
 ## Installation
 

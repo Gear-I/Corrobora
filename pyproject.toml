@@ -35,6 +35,7 @@ dependencies = [
     "python-evtx>=0.7.4",
     "python-registry>=1.3.1",
     "libscca-python>=20240427",
+    "PyQt5>=5.15",
 ]
 
 [project.optional-dependencies]
@@ -96,5 +97,8 @@ max-line-length = 100
 disable = ["duplicate-code"]
  
 [tool.pylint.main]
-extension-pkg-allow-list = ["pyscca"]
+# PyQt5's sip-based C extensions commonly trigger false no-member /
+# no-name-in-module findings (e.g. Qt.AlignCenter, pyqtSignal); allow-listing
+# lets pylint import them for real introspection instead of guessing.
+extension-pkg-allow-list = ["pyscca", "PyQt5", "PyQt5.QtCore", "PyQt5.QtGui", "PyQt5.QtWidgets"]
  

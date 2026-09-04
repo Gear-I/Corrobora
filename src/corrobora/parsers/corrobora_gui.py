@@ -1,16 +1,18 @@
 """Corrobora GUI -- single-file desktop application.
 
-A Tkinter-based desktop interface for Corrobora: lets an analyst pick
-EVTX, Registry, Prefetch, and MFT source files, run the correlation
-engine against them, and browse/export the resulting anti-forensic
-findings -- without needing to use four separate command-line tools.
+A PyQt5-based desktop interface for Corrobora, styled after the
+*LEAPP family's GUI conventions: an analyst points it at one evidence
+source (a folder or ``.zip``, auto-classified via ``case_ingest.py``),
+picks which artifact categories and validation rule categories to
+run, and gets back a scored, browsable set of anti-forensic findings
+-- without needing to use several separate command-line tools.
 
 This module depends on Corrobora's other single-file modules
 (``evtx.py``, ``registry.py``, ``prefetch.py``, ``mft.py``,
-``correlation_engine.py``) being importable from the same location.
+``correlation_engine.py``) and on ``corrobora.rules`` being importable
+from the same location.
 
-Uses only the Python standard library (``tkinter``) -- no additional
-GUI framework needs to be installed.
+Requires the ``PyQt5`` package (see ``pyproject.toml``).
 
 Run:
     python corrobora_gui.py
@@ -22,16 +24,38 @@ Run:
 
 from __future__ import annotations
 
+import base64
 import html
 import logging
-import queue
 import sys
-import threading
-import tkinter as tk
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from tkinter import filedialog, messagebox, scrolledtext, ttk
+
+from PyQt5.QtCore import QModelIndex, QObject, QRect, Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap
+from PyQt5.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QCheckBox,
+    QFileDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QPlainTextEdit,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 # Ensure the current module's own directory is on sys.path before
 # importing Corrobora's other local modules below. This is normally
@@ -53,6 +77,8 @@ from .correlation_engine import (  # pylint: disable=wrong-import-position
     Severity,
     build_context,
 )
+from ..rules.base import CorrelationRule  # pylint: disable=wrong-import-position
+from ..rules.rule_registry import RULE_REGISTRY  # pylint: disable=wrong-import-position
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +90,41 @@ _SEVERITY_COLORS: dict[Severity, str] = {
 }
 
 _WINDOW_TITLE = "Corrobora -- Cross-Artifact Validation Framework"
-_WINDOW_SIZE = "1150x870"
+_WINDOW_SIZE = (1150, 870)
+
+# Maps each DiscoveredArtifacts path-tuple field to the display label
+# shown in the "Artifact Categories" checklist. Only artifact types
+# Corrobora actually parses today are listed -- no placeholders for
+# types that don't exist yet (e.g. Amcache, Jump Lists, SRUM).
+_ARTIFACT_CATEGORIES: tuple[tuple[str, str], ...] = (
+    ("evtx_paths", "Event Logs (EVTX)"),
+    ("registry_paths", "Registry"),
+    ("prefetch_paths", "Prefetch"),
+    ("mft_paths", "MFT"),
+)
+
+# Display labels for known rule categories. A category not listed here
+# (e.g. a future addition to corrobora.rules) still gets a checkbox --
+# _rule_category_label() falls back to a title-cased version of the
+# raw category name, so new categories appear automatically.
+_RULE_CATEGORY_LABELS: dict[str, str] = {
+    "program_execution": "Program Execution",
+    "persistence": "Persistence",
+    "integrity": "Integrity",
+}
+
+
+def _rule_category_label(category: str) -> str:
+    """Return the display label for a rule category.
+
+    Args:
+        category: A :attr:`CorrelationRule.category` value.
+
+    Returns:
+        The configured label, or a title-cased fallback derived from
+        the raw category name if none is configured.
+    """
+    return _RULE_CATEGORY_LABELS.get(category, category.replace("_", " ").title())
 
 
 # --------------------------------------------------------------------------
@@ -650,7 +710,7 @@ _LOGO_ICON_PNG_B64 = (
 )
 
 # --------------------------------------------------------------------------
-# Pure helper logic (no Tkinter dependency -- independently testable)
+# Pure helper logic (no GUI-framework dependency -- independently testable)
 # --------------------------------------------------------------------------
 
 
@@ -677,11 +737,12 @@ def run_analysis(
     registry_paths: list[str | Path],
     prefetch_paths: list[str | Path],
     mft_paths: list[str | Path],
+    rules: list[CorrelationRule] | None = None,
 ) -> AnalysisOutcome:
     """Parse the given artifact sources and run the correlation engine.
 
-    This function has no Tkinter dependency, so it can be unit tested
-    directly with synthetic file paths. Delegates entirely to
+    This function has no GUI-framework dependency, so it can be unit
+    tested directly with synthetic file paths. Delegates entirely to
     ``correlation_engine.build_context`` and
     ``correlation_engine.CorrelationEngine``, which handle all four
     artifact types (including MFT) as first-class citizens.
@@ -691,6 +752,9 @@ def run_analysis(
         registry_paths: Paths to registry hive files.
         prefetch_paths: Paths to ``.pf`` files and/or folders.
         mft_paths: Paths to raw ``$MFT`` files.
+        rules: The correlation rules to run. Defaults to
+            :data:`corrobora.rules.rule_registry.DEFAULT_RULES` (via
+            :class:`CorrelationEngine`'s own default) if not provided.
 
     Returns:
         An :class:`AnalysisOutcome` describing the result.
@@ -702,7 +766,7 @@ def run_analysis(
             prefetch_paths=prefetch_paths,
             mft_paths=mft_paths,
         )
-        engine = CorrelationEngine()
+        engine = CorrelationEngine(rules=rules)
         findings = tuple(engine.run(context))
     except Exception as exc:  # pylint: disable=broad-exception-caught
         # Deliberately broad: this is the top-level boundary between the
@@ -734,13 +798,14 @@ def findings_to_html(findings: list[CorrelationFinding], title: str = "Corrobora
         rows.append(
             f'<tr class="sev-{finding.severity.value}">'
             f"<td>{html.escape(finding.severity.value.upper())}</td>"
+            f"<td>{finding.score}</td>"
             f"<td>{html.escape(finding.rule_name)}</td>"
             f"<td>{html.escape(finding.description)}</td>"
             f"<td>{evidence_html}</td>"
             f"<td>{sources_html}</td>"
             f"</tr>"
         )
-    table_rows = "\n".join(rows) if rows else '<tr><td colspan="5">No findings.</td></tr>'
+    table_rows = "\n".join(rows) if rows else '<tr><td colspan="6">No findings.</td></tr>'
     generated_at = datetime.now(UTC).isoformat()
 
     return f"""<!DOCTYPE html>
@@ -771,7 +836,7 @@ Generated {html.escape(generated_at)} &middot; {len(findings)} finding(s)
 </div>
 <table>
 <thead><tr>
-<th>Severity</th><th>Rule</th><th>Description</th><th>Evidence</th><th>Sources</th>
+<th>Severity</th><th>Score</th><th>Rule</th><th>Description</th><th>Evidence</th><th>Sources</th>
 </tr></thead>
 <tbody>
 {table_rows}
@@ -929,39 +994,41 @@ def generate_sample_mft_bytes() -> bytes:  # pylint: disable=too-many-statements
 
 
 # --------------------------------------------------------------------------
-# Logging bridge: root logger -> GUI text widget (thread-safe via queue)
+# Logging bridge: root logger -> GUI text widget (thread-safe via Qt signals)
 # --------------------------------------------------------------------------
 
 
-class QueueLogHandler(logging.Handler):
-    """A logging handler that pushes formatted records onto a queue.
+class QtLogHandler(QObject, logging.Handler):
+    """A logging handler that emits formatted records as a Qt signal.
 
-    Log records can originate on a background worker thread, but
-    Tkinter widgets may only be safely updated from the main thread.
-    This handler bridges the two: it only ever touches the
-    thread-safe ``queue.Queue``, and the GUI's main-thread poll loop
-    is responsible for draining it into the log widget.
+    Log records can originate on a background worker thread, but Qt
+    widgets may only be safely updated from the GUI thread. Qt's
+    signal/slot mechanism auto-queues delivery when the emitting
+    thread differs from the receiving (slot-owning) object's thread,
+    so this handler needs no manual queue or polling loop -- it just
+    emits, and Qt handles getting the call onto the GUI thread safely.
+
+    Note:
+        ``QObject`` must be the first base class: PyQt5's ``sip``
+        metaclass requires it for this style of multiple inheritance.
     """
 
-    def __init__(self, log_queue: queue.Queue) -> None:
-        """Initialize the handler.
+    log_emitted = pyqtSignal(str)
 
-        Args:
-            log_queue: The queue to push formatted log lines onto.
-        """
-        super().__init__()
-        self._queue = log_queue
+    def __init__(self) -> None:
+        """Initialize the handler."""
+        QObject.__init__(self)
+        logging.Handler.__init__(self)
         self.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
 
     def emit(self, record: logging.LogRecord) -> None:
-        """Format a log record and push it onto the queue.
+        """Format a log record and emit it.
 
         Args:
             record: The log record to handle.
         """
         try:
-            message = self.format(record)
-            self._queue.put(("log", message))
+            self.log_emitted.emit(self.format(record))
         except Exception:  # noqa: BLE001 pylint: disable=broad-exception-caught
             # Deliberately broad: logging.Handler.emit must never raise,
             # per the standard library's own handler contract.
@@ -969,123 +1036,221 @@ class QueueLogHandler(logging.Handler):
 
 
 # --------------------------------------------------------------------------
-# Reusable widget: one artifact type's source-file picker
+# Background analysis worker
 # --------------------------------------------------------------------------
 
 
-class ArtifactSourcePanel(ttk.LabelFrame):  # pylint: disable=too-many-ancestors
-    """A labeled panel for picking source files for one artifact type.
+class AnalysisWorker(QObject):  # pylint: disable=too-few-public-methods
+    """Runs :func:`run_analysis` on a background ``QThread``.
 
-    Wraps a listbox of selected paths with "Add File(s)", optionally
-    "Add Folder", "Remove Selected", and "Clear" buttons.
+    Note:
+        ``too-few-public-methods`` is intentionally suppressed: this
+        is a minimal QThread worker with a single ``run`` entry
+        point, the standard PyQt5 pattern for offloading work off
+        the GUI thread.
 
     Attributes:
-        label: The artifact type name shown on the panel.
+        finished: Emitted with the resulting :class:`AnalysisOutcome`
+            once the run completes.
     """
+
+    finished = pyqtSignal(object)
 
     def __init__(
         self,
-        parent: tk.Widget,
-        label: str,
-        file_types: list[tuple[str, str]],
-        allow_folder: bool = False,
-        folder_glob_pattern: str | None = None,
+        evtx_paths: list[str | Path],
+        registry_paths: list[str | Path],
+        prefetch_paths: list[str | Path],
+        mft_paths: list[str | Path],
+        rules: list[CorrelationRule] | None,
     ) -> None:
-        """Initialize the panel.
+        """Initialize the worker with the arguments to pass to :func:`run_analysis`."""
+        super().__init__()
+        self._args = (evtx_paths, registry_paths, prefetch_paths, mft_paths, rules)
+
+    def run(self) -> None:
+        """Run the analysis and emit :attr:`finished` with the outcome."""
+        self.finished.emit(run_analysis(*self._args))
+
+
+class _SortableItem(QTableWidgetItem):  # pylint: disable=too-few-public-methods
+    """A table item that sorts by a stored numeric key, not its displayed text.
+
+    ``QTableWidgetItem``'s default sort compares displayed text, which
+    would sort severities alphabetically ("HIGH" before "LOW") and
+    scores lexicographically ("9" after "10") instead of by their real
+    ordering.
+
+    Note:
+        ``too-few-public-methods`` is intentionally suppressed: this
+        class only needs to override ``__lt__`` (a dunder method, not
+        counted as "public" by this check) to change sort behavior --
+        it isn't missing an API, it has exactly the one it needs.
+    """
+
+    def __init__(self, text: str, sort_key: float) -> None:
+        """Initialize the item.
 
         Args:
-            parent: The parent Tkinter widget.
-            label: The artifact type name shown on the panel (e.g.
-                ``"EVTX Files"``).
-            file_types: File dialog filter patterns, as accepted by
-                ``tkinter.filedialog.askopenfilenames``.
-            allow_folder: Whether to show an "Add Folder" button that
-                expands a folder into matching files.
-            folder_glob_pattern: The glob pattern (e.g. ``"*.evtx"``)
-                used to expand a selected folder into individual
-                files. Required if ``allow_folder`` is ``True``.
+            text: The text to display.
+            sort_key: The numeric value to sort by instead of ``text``.
         """
-        super().__init__(parent, text=label, padding=6)
-        self.label = label
-        self._file_types = file_types
-        self._folder_glob_pattern = folder_glob_pattern
+        super().__init__(text)
+        self._sort_key = sort_key
 
-        self._listbox = tk.Listbox(self, height=4, selectmode=tk.EXTENDED)
-        self._listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
+    def __lt__(self, other: object) -> bool:
+        if isinstance(other, _SortableItem):
+            return self._sort_key < other._sort_key
+        return super().__lt__(other)
 
-        button_frame = ttk.Frame(self)
-        button_frame.pack(side=tk.LEFT, fill=tk.Y)
 
-        ttk.Button(button_frame, text="Add File(s)", command=self._add_files).pack(
-            fill=tk.X, pady=2
-        )
-        if allow_folder:
-            ttk.Button(button_frame, text="Add Folder", command=self._add_folder).pack(
-                fill=tk.X, pady=2
-            )
-        ttk.Button(button_frame, text="Remove Selected", command=self._remove_selected).pack(
-            fill=tk.X, pady=2
-        )
-        ttk.Button(button_frame, text="Clear", command=self._clear).pack(fill=tk.X, pady=2)
+# Corroboration-score fill colors, bucketed by strength. Deliberately the
+# same palette as _SEVERITY_COLORS for visual consistency, but keyed by
+# score magnitude rather than the Severity enum -- score and severity are
+# independent axes (see CorrelationFinding.score's docstring), so a
+# HIGH-severity finding can still have a low score and vice versa.
+_SCORE_BAR_COLORS: tuple[tuple[int, str], ...] = (
+    (75, "#c0392b"),
+    (50, "#d68910"),
+    (25, "#2471a3"),
+    (0, "#566573"),
+)
 
-    def get_paths(self) -> list[str]:
-        """Return all currently listed source paths.
 
-        Returns:
-            The list of paths currently shown in the panel's listbox.
-        """
-        return list(self._listbox.get(0, tk.END))
+def _score_bar_color(score: int) -> QColor:
+    """Return the fill color for a given corroboration score.
 
-    def set_paths(self, paths: list[str], replace: bool = True) -> None:
-        """Populate the listbox with a given set of paths.
+    Args:
+        score: A 0-100 corroboration score.
 
-        Used by case-ingest auto-discovery to fill in this panel
-        without the user manually browsing for each file.
+    Returns:
+        The color for the highest threshold ``score`` meets or exceeds.
+    """
+    for threshold, color in _SCORE_BAR_COLORS:
+        if score >= threshold:
+            return QColor(color)
+    return QColor(_SCORE_BAR_COLORS[-1][1])
+
+
+class _ScoreBarDelegate(QStyledItemDelegate):
+    """Paints a table cell as a filled bar followed by a percentage label.
+
+    Renders each finding's corroboration score visually (e.g. a mostly
+    filled bar for a strong score) rather than as a bare number, while
+    leaving the underlying :class:`_SortableItem` untouched -- sorting
+    still works exactly as before, since this only changes how the
+    existing item is painted, not what data or sort key it holds.
+    """
+
+    _BAR_HEIGHT = 14
+    _EMPTY_COLOR = QColor("#e5e8ec")
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
+        """Paint the score bar and label for one cell.
 
         Args:
-            paths: The paths to display.
-            replace: If ``True`` (the default), any existing entries
-                are cleared first. If ``False``, ``paths`` are
-                appended to the existing list.
+            painter: The active painter.
+            option: Style options for this cell (position, size, etc.).
+            index: The model index being painted.
         """
-        if replace:
-            self._clear()
-        for path in paths:
-            self._listbox.insert(tk.END, path)
+        try:
+            score = int(index.data())
+        except (TypeError, ValueError):
+            super().paint(painter, option, index)
+            return
 
-    def _add_files(self) -> None:
-        """Open a file picker and add the chosen files to the list."""
-        selected = filedialog.askopenfilenames(
-            title=f"Select {self.label}", filetypes=self._file_types
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        label = f"{score}%"
+        label_width = painter.fontMetrics().horizontalAdvance(label)
+        cell = option.rect
+        bar_width = max(cell.width() - label_width - 16, 10)
+        bar_rect = QRect(
+            cell.left() + 4,
+            cell.top() + (cell.height() - self._BAR_HEIGHT) // 2,
+            bar_width,
+            self._BAR_HEIGHT,
         )
-        for path in selected:
-            self._listbox.insert(tk.END, path)
 
-    def _add_folder(self) -> None:
-        """Open a folder picker and add all matching files within it."""
-        if self._folder_glob_pattern is None:
-            return
-        folder = filedialog.askdirectory(title=f"Select folder of {self.label}")
-        if not folder:
-            return
-        matches = sorted(Path(folder).glob(self._folder_glob_pattern))
-        if not matches:
-            messagebox.showinfo(
-                "No files found",
-                f"No files matching '{self._folder_glob_pattern}' were found in:\n{folder}",
-            )
-            return
-        for match in matches:
-            self._listbox.insert(tk.END, str(match))
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(self._EMPTY_COLOR)
+        painter.drawRoundedRect(bar_rect, 3, 3)
 
-    def _remove_selected(self) -> None:
-        """Remove the currently selected listbox entries."""
-        for index in reversed(self._listbox.curselection()):
-            self._listbox.delete(index)
+        fill_width = int(bar_rect.width() * min(max(score, 0), 100) / 100)
+        if fill_width > 0:
+            fill_rect = QRect(bar_rect.x(), bar_rect.y(), fill_width, bar_rect.height())
+            painter.setBrush(_score_bar_color(score))
+            painter.drawRoundedRect(fill_rect, 3, 3)
 
-    def _clear(self) -> None:
-        """Remove all entries from the listbox."""
-        self._listbox.delete(0, tk.END)
+        painter.setPen(QColor("#1a1a1a"))
+        label_rect = QRect(bar_rect.right() + 8, cell.top(), label_width + 4, cell.height())
+        painter.drawText(label_rect, Qt.AlignVCenter | Qt.AlignLeft, label)
+
+        painter.restore()
+
+
+# --------------------------------------------------------------------------
+# Styling
+# --------------------------------------------------------------------------
+
+_STYLESHEET = """
+QMainWindow {
+    background-color: #f5f6f8;
+}
+QGroupBox {
+    font-weight: bold;
+    border: 1px solid #c7cdd6;
+    border-radius: 6px;
+    margin-top: 10px;
+    padding-top: 10px;
+    background-color: #ffffff;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 4px;
+    color: #2d2d2d;
+}
+QPushButton {
+    padding: 6px 14px;
+    border: 1px solid #b0b6bf;
+    border-radius: 4px;
+    background-color: #ffffff;
+}
+QPushButton:hover {
+    background-color: #eef2f7;
+}
+QPushButton:disabled {
+    color: #9aa0a6;
+}
+QPushButton#runButton {
+    background-color: #2d6cdf;
+    color: #ffffff;
+    font-weight: bold;
+    font-size: 11pt;
+    padding: 10px 24px;
+    border: none;
+}
+QPushButton#runButton:hover {
+    background-color: #245bc0;
+}
+QPushButton#runButton:disabled {
+    background-color: #9fb7e8;
+    color: #eef2f7;
+}
+QTableWidget {
+    border: 1px solid #c7cdd6;
+    background-color: #ffffff;
+    gridline-color: #e5e8ec;
+}
+QHeaderView::section {
+    background-color: #2d2d2d;
+    color: #ffffff;
+    padding: 4px;
+    border: none;
+}
+"""
 
 
 # --------------------------------------------------------------------------
@@ -1093,313 +1258,379 @@ class ArtifactSourcePanel(ttk.LabelFrame):  # pylint: disable=too-many-ancestors
 # --------------------------------------------------------------------------
 
 
-class CorroboraApp:  # pylint: disable=too-many-instance-attributes,too-few-public-methods
-    """The main Corrobora GUI application.
+class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-few-public-methods
+    QMainWindow
+):
+    """The main Corrobora GUI window.
 
     Note:
         ``too-many-instance-attributes`` is intentionally suppressed:
-        each attribute is a distinct widget this application owns,
-        which is inherent to a GUI class of this size, not incidental
-        complexity. ``too-few-public-methods`` is also suppressed:
-        this is an Application class driven entirely by widget-bound
-        callbacks (buttons, selection events), not a library class
-        meant to expose a broader public API.
+        each attribute is a distinct widget or piece of state this
+        window owns, which is inherent to a GUI class of this size,
+        not incidental complexity. ``too-few-public-methods`` is also
+        suppressed: this is a window class driven entirely by
+        widget-bound callbacks (buttons, selection events), all
+        intentionally private (leading underscore) since none are
+        meant to be called from outside the class, not a library
+        class meant to expose a broader public API.
 
-    Owns the Tkinter root window and all top-level widgets. Analysis
-    runs on a background thread (see :meth:`_start_analysis`) so the
-    UI never freezes; the thread communicates back to the main thread
-    exclusively through a thread-safe queue, polled via
-    ``root.after``.
-
-    Attributes:
-        root: The Tkinter root window.
+    An analyst points this window at one evidence source (a folder or
+    ``.zip``), picks which artifact categories and validation rule
+    categories to run, and runs the analysis on a background
+    ``QThread`` (see :meth:`_start_analysis`) so the UI never freezes.
+    The thread communicates back to the GUI thread exclusively via Qt
+    signals (see :class:`AnalysisWorker`, :class:`QtLogHandler`).
     """
 
-    def __init__(self, root: tk.Tk) -> None:
-        """Initialize the application and build all widgets.
+    def __init__(self) -> None:
+        """Initialize the window and build all widgets."""
+        super().__init__()
+        self.setWindowTitle(_WINDOW_TITLE)
+        self.resize(*_WINDOW_SIZE)
+        self._set_window_icon()
 
-        Args:
-            root: The Tkinter root window to build the UI inside.
-        """
-        self.root = root
-        self.root.title(_WINDOW_TITLE)
-        self.root.geometry(_WINDOW_SIZE)
-        self._maximize_window()
-
-        self._queue: queue.Queue = queue.Queue()
+        self._discovered: DiscoveredArtifacts | None = None
         self._last_findings: list[CorrelationFinding] = []
         self._analysis_running = False
+        self._category_checkboxes: dict[str, QCheckBox] = {}
+        self._rule_category_checkboxes: dict[str, QCheckBox] = {}
+        self._worker: AnalysisWorker | None = None
+        self._thread: QThread | None = None
+        self._log_handler: QtLogHandler | None = None
 
-        # Widgets are constructed in _build_widgets(); declared here with
-        # their types so the full attribute surface of this class is
-        # visible in one place.
-        self._icon_image: tk.PhotoImage
-        self._banner_image: tk.PhotoImage
-        self._evtx_panel: ArtifactSourcePanel
-        self._registry_panel: ArtifactSourcePanel
-        self._prefetch_panel: ArtifactSourcePanel
-        self._mft_panel: ArtifactSourcePanel
-        self._run_button: ttk.Button
-        self._export_button: ttk.Button
-        self._status_label: ttk.Label
-        self._progress: ttk.Progressbar
-        self._tree: ttk.Treeview
-        self._detail_text: tk.Text
-        self._log_text: scrolledtext.ScrolledText
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(8, 0, 8, 8)
+        layout.setSpacing(10)
 
-        self._set_window_icon()
-        self._build_widgets()
+        self._build_header(layout)
+        self._build_evidence_section(layout)
+        self._build_output_section(layout)
+        self._build_artifact_categories_section(layout)
+        self._build_validation_rules_section(layout)
+        self._build_run_controls(layout)
+        self._build_results_panel(layout)
+        self._build_log_panel(layout)
+        layout.addStretch(1)
+
+        scroll_area.setWidget(content)
+        self.setCentralWidget(scroll_area)
+
         self._attach_logging()
-        self.root.after(100, self._poll_queue)
-
-    def _maximize_window(self) -> None:
-        """Start the window maximized so no panel is cut off on smaller screens.
-
-        The fixed default size in ``_WINDOW_SIZE`` was set generously
-        to fit every panel (source lists, controls, findings table,
-        detail pane, log) plus the header banner, but that total can
-        exceed the visible height of smaller/laptop screens if the
-        window isn't maximized -- with the findings table and log
-        panel, near the bottom, being the first things to end up
-        below the visible screen area. Starting maximized avoids that
-        regardless of screen size; the window remains a normal,
-        user-resizable window afterward.
-
-        ``wm_state('zoomed')`` is the standard, native way to do this
-        on Windows. It depends on window-manager support, though, so
-        as a robust fallback that doesn't depend on that at all, this
-        also explicitly sizes the window to the screen's own reported
-        dimensions -- which works even in environments where the
-        'zoomed' state hint is ignored.
-        """
-        try:
-            self.root.state("zoomed")
-        except tk.TclError as exc:
-            logger.debug("wm_state('zoomed') unavailable: %s", exc)
-
-        # Belt-and-suspenders: if 'zoomed' didn't actually take effect (its
-        # success can't be fully determined just from not raising -- some
-        # window managers silently ignore it), explicitly size the window
-        # to the screen's own reported dimensions instead.
-        self.root.update_idletasks()
-        if self.root.state() != "zoomed":
-            screen_width = self.root.winfo_screenwidth()
-            screen_height = self.root.winfo_screenheight()
-            self.root.geometry(f"{screen_width}x{screen_height}+0+0")
+        self.setStyleSheet(_STYLESHEET)
+        self.showMaximized()
 
     def _set_window_icon(self) -> None:
-        """Set the window/taskbar icon from the embedded logo badge.
-
-        The image reference is kept on ``self`` -- Tkinter does not
-        keep its own strong reference to a ``PhotoImage``, so without
-        this the icon would be garbage-collected and silently vanish
-        shortly after being set.
-        """
+        """Set the window/taskbar icon from the embedded logo badge."""
         try:
-            self._icon_image = tk.PhotoImage(data=_LOGO_ICON_PNG_B64)
-            self.root.iconphoto(True, self._icon_image)
-        except tk.TclError as exc:
+            pixmap = QPixmap()
+            pixmap.loadFromData(base64.b64decode(_LOGO_ICON_PNG_B64))
+        except ValueError as exc:
             logger.warning("Could not set window icon: %s", exc)
+            return
+        if not pixmap.isNull():
+            self.setWindowIcon(QIcon(pixmap))
 
     # -- widget construction -------------------------------------------------
 
-    def _build_widgets(self) -> None:
-        """Build and lay out all top-level widgets.
+    _HEADER_BANNER_HEIGHT = 64
+    """Fixed display height for the header banner.
 
-        Everything is built inside a scrollable canvas (see
-        :meth:`_build_scroll_container`) rather than packed directly
-        into the root window. On a screen too short to fit every
-        panel at once (a real issue on smaller/laptop displays --
-        the four source panels plus the header alone can exceed a
-        768px-tall screen), the content becomes scrollable instead of
-        having its bottom panels (findings, log) silently pushed
-        below the visible screen area with no way to reach them.
-        """
-        content = self._build_scroll_container()
-        self._build_header(content)
-        self._build_source_panels(content)
-        self._build_controls(content)
-        self._build_results_panel(content)
-        self._build_log_panel(content)
+    The embedded artwork's native size is much taller than a header
+    needs; left unscaled, it ate a large share of vertical space and
+    pushed the checkboxes/results below the fold on common laptop and
+    1080p-class screens, forcing more scrolling than the content
+    otherwise requires.
+    """
 
-    def _build_scroll_container(self) -> tk.Widget:
-        """Build a scrollable canvas that all other widgets are placed inside.
-
-        Returns:
-            The frame inside the canvas that subsequent
-            ``_build_*`` methods should use as their parent widget,
-            instead of ``self.root`` directly.
-        """
-        canvas = tk.Canvas(self.root, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(self.root, orient=tk.VERTICAL, command=canvas.yview)
-        canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        content = ttk.Frame(canvas)
-        content_window = canvas.create_window((0, 0), window=content, anchor="nw")
-
-        def _sync_scroll_region(_event: object) -> None:
-            canvas.configure(scrollregion=canvas.bbox("all"))
-
-        def _sync_content_width(event: object) -> None:
-            # Keep the inner frame exactly as wide as the canvas viewport,
-            # so widgets that expand horizontally (fill=tk.X) do so
-            # correctly instead of being clipped to the frame's natural
-            # (unscrolled) size.
-            canvas.itemconfigure(content_window, width=event.width)  # type: ignore[attr-defined]
-
-        content.bind("<Configure>", _sync_scroll_region)
-        canvas.bind("<Configure>", _sync_content_width)
-
-        def _on_mouse_wheel(event: tk.Event) -> None:
-            # Windows reports wheel movement in event.delta (multiples of
-            # 120); this converts it to a small number of scroll units.
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-        canvas.bind_all("<MouseWheel>", _on_mouse_wheel)
-
-        return content
-
-    def _build_header(self, parent: tk.Widget) -> None:
+    def _build_header(self, layout: QVBoxLayout) -> None:
         """Build the branded header banner at the top of the window.
 
         Falls back to a plain text title (no crash) if the embedded
         logo image data can't be decoded for any reason -- branding
         is cosmetic and must never prevent the application from
         starting.
+
+        Args:
+            layout: The top-level content layout to add the header to.
         """
-        header = tk.Frame(parent, background="#000000")
-        header.pack(fill=tk.X)
+        header = QWidget()
+        header.setStyleSheet("background-color: #000000;")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(0, 8, 0, 8)
         try:
-            self._banner_image = tk.PhotoImage(data=_LOGO_BANNER_PNG_B64)
-            tk.Label(header, image=self._banner_image, background="#000000").pack(
-                pady=6
-            )
-        except tk.TclError as exc:
+            pixmap = QPixmap()
+            pixmap.loadFromData(base64.b64decode(_LOGO_BANNER_PNG_B64))
+            if pixmap.isNull():
+                raise ValueError("banner image data decoded to an empty pixmap")
+        except ValueError as exc:
             logger.warning("Could not load header banner image: %s", exc)
-            tk.Label(
-                header,
-                text="Corrobora",
-                background="#000000",
-                foreground="#4a90d9",
-                font=("Segoe UI", 18, "bold"),
-            ).pack(pady=10)
+            fallback = QLabel("Corrobora")
+            fallback.setStyleSheet("color: #4a90d9; font-size: 18pt; font-weight: bold;")
+            header_layout.addWidget(fallback, alignment=Qt.AlignCenter)
+        else:
+            scaled = pixmap.scaledToHeight(
+                self._HEADER_BANNER_HEIGHT, Qt.SmoothTransformation
+            )
+            banner_label = QLabel()
+            banner_label.setPixmap(scaled)
+            header_layout.addWidget(banner_label, alignment=Qt.AlignCenter)
+        layout.addWidget(header)
 
-    def _build_source_panels(self, parent: tk.Widget) -> None:
-        """Build the four artifact-source selection panels."""
-        container = ttk.Frame(parent, padding=8)
-        container.pack(fill=tk.X)
-
-        self._evtx_panel = ArtifactSourcePanel(
-            container,
-            "EVTX Files",
-            file_types=[("EVTX files", "*.evtx"), ("All files", "*.*")],
-            allow_folder=True,
-            folder_glob_pattern="*.evtx",
+    def _build_evidence_section(self, layout: QVBoxLayout) -> None:
+        """Build the "Evidence Source" section: one folder/zip field + browse buttons."""
+        group = QGroupBox("Evidence Source")
+        group_layout = QHBoxLayout(group)
+        self._evidence_path_edit = QLineEdit()
+        self._evidence_path_edit.setReadOnly(True)
+        self._evidence_path_edit.setPlaceholderText(
+            "Select an evidence folder or a case .zip archive..."
         )
-        self._evtx_panel.pack(fill=tk.X, pady=2)
+        group_layout.addWidget(self._evidence_path_edit, stretch=1)
+        browse_folder_button = QPushButton("Browse Folder...")
+        browse_folder_button.clicked.connect(self._browse_evidence_folder)
+        group_layout.addWidget(browse_folder_button)
+        browse_zip_button = QPushButton("...or a ZIP")
+        browse_zip_button.clicked.connect(self._browse_evidence_zip)
+        group_layout.addWidget(browse_zip_button)
+        layout.addWidget(group)
 
-        self._registry_panel = ArtifactSourcePanel(
-            container,
-            "Registry Hive Files",
-            file_types=[("All files", "*.*")],
-            allow_folder=False,
+    def _build_output_section(self, layout: QVBoxLayout) -> None:
+        """Build the "Output Directory" section: where reports auto-save to."""
+        group = QGroupBox("Output Directory")
+        group_layout = QHBoxLayout(group)
+        self._output_dir_edit = QLineEdit()
+        self._output_dir_edit.setReadOnly(True)
+        self._output_dir_edit.setPlaceholderText(
+            "Optional -- select a folder to auto-save each report to..."
         )
-        self._registry_panel.pack(fill=tk.X, pady=2)
+        group_layout.addWidget(self._output_dir_edit, stretch=1)
+        browse_button = QPushButton("Browse...")
+        browse_button.clicked.connect(self._browse_output_dir)
+        group_layout.addWidget(browse_button)
+        layout.addWidget(group)
 
-        self._prefetch_panel = ArtifactSourcePanel(
-            container,
-            "Prefetch (.pf) Files",
-            file_types=[("Prefetch files", "*.pf"), ("All files", "*.*")],
-            allow_folder=True,
-            folder_glob_pattern="*.pf",
-        )
-        self._prefetch_panel.pack(fill=tk.X, pady=2)
+    def _build_artifact_categories_section(self, layout: QVBoxLayout) -> None:
+        """Build the "Artifact Categories" checkbox list.
 
-        self._mft_panel = ArtifactSourcePanel(
-            container,
-            "$MFT Files",
-            file_types=[("All files", "*.*")],
-            allow_folder=False,
-        )
-        self._mft_panel.pack(fill=tk.X, pady=2)
+        Only the artifact types Corrobora actually parses today are
+        listed (see :data:`_ARTIFACT_CATEGORIES`) -- no placeholders
+        for types that don't exist yet.
+        """
+        group = QGroupBox("Artifact Categories")
+        group_layout = QVBoxLayout(group)
+        for field, label in _ARTIFACT_CATEGORIES:
+            checkbox = QCheckBox(label)
+            checkbox.setChecked(True)
+            self._category_checkboxes[field] = checkbox
+            group_layout.addWidget(checkbox)
+        layout.addWidget(group)
 
-    def _build_controls(self, parent: tk.Widget) -> None:
+    def _build_validation_rules_section(self, layout: QVBoxLayout) -> None:
+        """Build the "Validation Rules" checkbox list.
+
+        One checkbox per actual rule category in
+        :data:`~corrobora.rules.rule_registry.RULE_REGISTRY` (today:
+        Program Execution, Persistence, Integrity) -- not an
+        illustrative list, so a new rule category appears here
+        automatically without a code change.
+        """
+        group = QGroupBox("Validation Rules")
+        group_layout = QVBoxLayout(group)
+        categories = sorted({cls.category for cls in RULE_REGISTRY.values()})
+        for category in categories:
+            checkbox = QCheckBox(_rule_category_label(category))
+            checkbox.setChecked(True)
+            self._rule_category_checkboxes[category] = checkbox
+            group_layout.addWidget(checkbox)
+        layout.addWidget(group)
+
+    def _build_run_controls(self, layout: QVBoxLayout) -> None:
         """Build the run/export/sample-data control bar and progress indicator."""
-        control_bar = ttk.Frame(parent, padding=(8, 4))
-        control_bar.pack(fill=tk.X)
+        control_bar = QWidget()
+        control_layout = QHBoxLayout(control_bar)
+        control_layout.setContentsMargins(0, 0, 0, 0)
 
-        ttk.Button(
-            control_bar, text="Load Case Folder...", command=self._load_case_folder
-        ).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(
-            control_bar, text="Load Case ZIP...", command=self._load_case_zip
-        ).pack(side=tk.LEFT, padx=(0, 6))
+        self._run_button = QPushButton("RUN CORROBORA")
+        self._run_button.setObjectName("runButton")
+        self._run_button.clicked.connect(self._start_analysis)
+        control_layout.addWidget(self._run_button)
 
-        self._run_button = ttk.Button(
-            control_bar, text="Run Analysis", command=self._start_analysis
-        )
-        self._run_button.pack(side=tk.LEFT, padx=(0, 6))
+        self._export_button = QPushButton("Export a Copy...")
+        self._export_button.clicked.connect(self._export_html)
+        self._export_button.setEnabled(False)
+        control_layout.addWidget(self._export_button)
 
-        self._export_button = ttk.Button(
-            control_bar,
-            text="Export Findings to HTML",
-            command=self._export_html,
-            state=tk.DISABLED,
-        )
-        self._export_button.pack(side=tk.LEFT, padx=(0, 6))
+        sample_button = QPushButton("Generate Sample $MFT Data...")
+        sample_button.clicked.connect(self._generate_sample_mft)
+        control_layout.addWidget(sample_button)
 
-        ttk.Button(
-            control_bar, text="Generate Sample $MFT Data", command=self._generate_sample_mft
-        ).pack(side=tk.LEFT, padx=(0, 6))
+        self._status_label = QLabel("Ready.")
+        control_layout.addWidget(self._status_label, stretch=1)
 
-        self._status_label = ttk.Label(control_bar, text="Ready.")
-        self._status_label.pack(side=tk.LEFT, padx=(12, 0))
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 1)
+        self._progress.setValue(0)
+        self._progress.setFixedWidth(150)
+        control_layout.addWidget(self._progress)
 
-        self._progress = ttk.Progressbar(control_bar, mode="indeterminate", length=150)
-        self._progress.pack(side=tk.RIGHT)
+        layout.addWidget(control_bar)
 
-    def _build_results_panel(self, parent: tk.Widget) -> None:
-        """Build the findings Treeview and its detail pane."""
-        frame = ttk.LabelFrame(parent, text="Findings", padding=6)
-        frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+    def _build_results_panel(self, layout: QVBoxLayout) -> None:
+        """Build the findings table and its detail pane."""
+        group = QGroupBox("Findings")
+        group_layout = QVBoxLayout(group)
 
-        columns = ("severity", "rule", "description")
-        self._tree = ttk.Treeview(frame, columns=columns, show="headings", height=10)
-        self._tree.heading("severity", text="Severity", command=lambda: self._sort_by("severity"))
-        self._tree.heading("rule", text="Rule", command=lambda: self._sort_by("rule"))
-        self._tree.heading("description", text="Description")
-        self._tree.column("severity", width=90, anchor=tk.W)
-        self._tree.column("rule", width=220, anchor=tk.W)
-        self._tree.column("description", width=650, anchor=tk.W)
+        self._results_table = QTableWidget(0, 4)
+        self._results_table.setHorizontalHeaderLabels(["Severity", "Score", "Rule", "Description"])
+        self._results_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._results_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self._results_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._results_table.setSortingEnabled(True)
+        self._results_table.horizontalHeader().setStretchLastSection(True)
+        self._results_table.setColumnWidth(1, 140)
+        # Kept as an instance attribute, not a local: PyQt5 doesn't keep its
+        # own strong reference to a delegate, so without this it would be
+        # garbage-collected and the column would silently fall back to
+        # plain-text rendering.
+        self._score_delegate = _ScoreBarDelegate(self._results_table)
+        self._results_table.setItemDelegateForColumn(1, self._score_delegate)
+        self._results_table.itemSelectionChanged.connect(self._on_finding_selected)
+        group_layout.addWidget(self._results_table)
 
-        for severity, color in _SEVERITY_COLORS.items():
-            self._tree.tag_configure(severity.value, foreground=color)
+        layout.addWidget(group)
 
-        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self._tree.yview)
-        self._tree.configure(yscrollcommand=scrollbar.set)
-        self._tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.LEFT, fill=tk.Y)
-        self._tree.bind("<<TreeviewSelect>>", self._on_finding_selected)
+        detail_group = QGroupBox("Finding Detail")
+        detail_layout = QVBoxLayout(detail_group)
+        self._detail_text = QPlainTextEdit()
+        self._detail_text.setReadOnly(True)
+        self._detail_text.setFixedHeight(110)
+        detail_layout.addWidget(self._detail_text)
+        layout.addWidget(detail_group)
 
-        detail_frame = ttk.LabelFrame(parent, text="Finding Detail", padding=6)
-        detail_frame.pack(fill=tk.X, padx=8, pady=(0, 4))
-        self._detail_text = tk.Text(detail_frame, height=5, wrap=tk.WORD, state=tk.DISABLED)
-        self._detail_text.pack(fill=tk.X)
-
-    def _build_log_panel(self, parent: tk.Widget) -> None:
+    def _build_log_panel(self, layout: QVBoxLayout) -> None:
         """Build the scrolling log output panel."""
-        frame = ttk.LabelFrame(parent, text="Log", padding=6)
-        frame.pack(fill=tk.BOTH, expand=False, padx=8, pady=(0, 8))
-        self._log_text = scrolledtext.ScrolledText(frame, height=8, state=tk.DISABLED)
-        self._log_text.pack(fill=tk.BOTH, expand=True)
+        group = QGroupBox("Log")
+        group_layout = QVBoxLayout(group)
+        self._log_text = QPlainTextEdit()
+        self._log_text.setReadOnly(True)
+        self._log_text.setFixedHeight(150)
+        group_layout.addWidget(self._log_text)
+        layout.addWidget(group)
 
     def _attach_logging(self) -> None:
-        """Attach a queue-backed logging handler to the root logger."""
-        handler = QueueLogHandler(self._queue)
-        logging.getLogger().addHandler(handler)
+        """Attach a Qt-signal-backed logging handler to the root logger."""
+        self._log_handler = QtLogHandler()
+        self._log_handler.log_emitted.connect(self._append_log)
+        logging.getLogger().addHandler(self._log_handler)
         logging.getLogger().setLevel(logging.INFO)
+
+    # -- evidence source / case ingest ----------------------------------------
+
+    def _browse_evidence_folder(self) -> None:
+        """Prompt for an evidence folder and scan it."""
+        folder = QFileDialog.getExistingDirectory(self, "Select case folder")
+        if not folder:
+            return
+        self._evidence_path_edit.setText(folder)
+        self._scan_evidence(folder)
+
+    def _browse_evidence_zip(self) -> None:
+        """Prompt for an evidence .zip archive and scan it."""
+        zip_path, _selected_filter = QFileDialog.getOpenFileName(
+            self, "Select case .zip archive", filter="Zip archives (*.zip)"
+        )
+        if not zip_path:
+            return
+        self._evidence_path_edit.setText(zip_path)
+        self._scan_evidence(zip_path)
+
+    def _scan_evidence(self, path: str) -> None:
+        """Discover artifacts at a path and update the category checklist.
+
+        Args:
+            path: A case folder or ``.zip`` archive path, as chosen by
+                the user.
+        """
+        self._status_label.setText("Scanning case...")
+        QApplication.processEvents()
+        try:
+            artifacts = load_case(path)
+        except InvalidCasePathError as exc:
+            self._status_label.setText("Case scan failed.")
+            QMessageBox.critical(self, "Case scan failed", str(exc))
+            return
+
+        self._discovered = artifacts
+        self._update_category_labels()
+        self._status_label.setText(f"Loaded case: {artifacts.total_count} artifact(s) found.")
+        logger.info(
+            "Case loaded: %d EVTX, %d registry, %d Prefetch, %d MFT "
+            "(%d file(s) unclassified).",
+            len(artifacts.evtx_paths),
+            len(artifacts.registry_paths),
+            len(artifacts.prefetch_paths),
+            len(artifacts.mft_paths),
+            artifacts.unclassified_count,
+        )
+        if artifacts.total_count == 0:
+            QMessageBox.warning(
+                self,
+                "No artifacts found",
+                f"No recognized EVTX, registry, Prefetch, or MFT files were found "
+                f"in:\n{path}\n\n"
+                f"({artifacts.unclassified_count} other file(s) were present but "
+                f"not recognized.)",
+            )
+
+    def _update_category_labels(self) -> None:
+        """Refresh each artifact-category checkbox's label with its discovered count."""
+        for field, label in _ARTIFACT_CATEGORIES:
+            count = len(getattr(self._discovered, field)) if self._discovered else 0
+            self._category_checkboxes[field].setText(f"{label} — {count} found")
+
+    def _browse_output_dir(self) -> None:
+        """Prompt for an output directory for auto-saved reports."""
+        folder = QFileDialog.getExistingDirectory(self, "Select output directory")
+        if folder:
+            self._output_dir_edit.setText(folder)
+
+    # -- checkbox-driven filtering ---------------------------------------------
+
+    def _filtered_artifact_paths(
+        self,
+    ) -> tuple[list[str], list[str], list[str], list[str]]:
+        """Return discovered artifact paths, gated by the category checkboxes.
+
+        Returns:
+            A ``(evtx_paths, registry_paths, prefetch_paths,
+            mft_paths)`` tuple, in the same order as
+            :data:`_ARTIFACT_CATEGORIES`. Any category whose checkbox
+            is unchecked -- or before any evidence source has been
+            scanned -- contributes an empty list.
+        """
+        filtered: list[list[str]] = []
+        for field, _label in _ARTIFACT_CATEGORIES:
+            if self._discovered is not None and self._category_checkboxes[field].isChecked():
+                filtered.append(list(getattr(self._discovered, field)))
+            else:
+                filtered.append([])
+        return filtered[0], filtered[1], filtered[2], filtered[3]
+
+    def _selected_rules(self) -> list[CorrelationRule]:
+        """Return one instance of every rule whose category checkbox is checked.
+
+        Returns:
+            Freshly instantiated rules from
+            :data:`~corrobora.rules.rule_registry.RULE_REGISTRY`.
+        """
+        return [
+            rule_cls()
+            for rule_cls in RULE_REGISTRY.values()
+            if self._rule_category_checkboxes[rule_cls.category].isChecked()
+        ]
 
     # -- analysis lifecycle ---------------------------------------------------
 
@@ -1407,63 +1638,42 @@ class CorroboraApp:  # pylint: disable=too-many-instance-attributes,too-few-publ
         """Validate inputs and start a background analysis run."""
         if self._analysis_running:
             return
+        if self._discovered is None:
+            QMessageBox.warning(
+                self,
+                "No evidence source",
+                "Select an evidence source (folder or ZIP) before running analysis.",
+            )
+            return
 
-        evtx_paths: list[str | Path] = list(self._evtx_panel.get_paths())
-        registry_paths: list[str | Path] = list(self._registry_panel.get_paths())
-        prefetch_paths: list[str | Path] = list(self._prefetch_panel.get_paths())
-        mft_paths: list[str | Path] = list(self._mft_panel.get_paths())
-
+        evtx_paths, registry_paths, prefetch_paths, mft_paths = self._filtered_artifact_paths()
         if not (evtx_paths or registry_paths or prefetch_paths or mft_paths):
-            messagebox.showwarning(
+            QMessageBox.warning(
+                self,
                 "No sources selected",
-                "Add at least one EVTX, Registry, Prefetch, or $MFT file before running analysis.",
+                "Enable at least one Artifact Category that has discovered files "
+                "before running analysis.",
             )
             return
 
         self._analysis_running = True
-        self._run_button.configure(state=tk.DISABLED)
-        self._export_button.configure(state=tk.DISABLED)
-        self._status_label.configure(text="Running analysis...")
-        self._progress.start(12)
+        self._run_button.setEnabled(False)
+        self._export_button.setEnabled(False)
+        self._status_label.setText("Running analysis...")
+        self._progress.setRange(0, 0)
         self._clear_results()
 
-        thread = threading.Thread(
-            target=self._analysis_worker,
-            args=(evtx_paths, registry_paths, prefetch_paths, mft_paths),
-            daemon=True,
+        self._thread = QThread(self)
+        self._worker = AnalysisWorker(
+            evtx_paths, registry_paths, prefetch_paths, mft_paths, self._selected_rules()
         )
-        thread.start()
-
-    def _analysis_worker(
-        self,
-        evtx_paths: list[str | Path],
-        registry_paths: list[str | Path],
-        prefetch_paths: list[str | Path],
-        mft_paths: list[str | Path],
-    ) -> None:
-        """Run analysis on a background thread and post the outcome to the queue.
-
-        Args:
-            evtx_paths: Paths to ``.evtx`` files.
-            registry_paths: Paths to registry hive files.
-            prefetch_paths: Paths to ``.pf`` files and/or folders.
-            mft_paths: Paths to raw ``$MFT`` files.
-        """
-        outcome = run_analysis(evtx_paths, registry_paths, prefetch_paths, mft_paths)
-        self._queue.put(("result", outcome))
-
-    def _poll_queue(self) -> None:
-        """Drain the worker-thread queue and apply updates on the main thread."""
-        try:
-            while True:
-                item = self._queue.get_nowait()
-                if item[0] == "log":
-                    self._append_log(item[1])
-                elif item[0] == "result":
-                    self._handle_analysis_result(item[1])
-        except queue.Empty:
-            pass
-        self.root.after(100, self._poll_queue)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.finished.connect(self._handle_analysis_result)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.finished.connect(self._worker.deleteLater)
+        self._thread.finished.connect(self._thread.deleteLater)
+        self._thread.start()
 
     def _handle_analysis_result(self, outcome: AnalysisOutcome) -> None:
         """Apply a completed analysis outcome to the UI.
@@ -1471,58 +1681,93 @@ class CorroboraApp:  # pylint: disable=too-many-instance-attributes,too-few-publ
         Args:
             outcome: The result from :func:`run_analysis`.
         """
-        self._progress.stop()
-        self._run_button.configure(state=tk.NORMAL)
+        self._progress.setRange(0, 1)
+        self._progress.setValue(0)
+        self._run_button.setEnabled(True)
         self._analysis_running = False
 
         if outcome.error is not None:
-            self._status_label.configure(text="Analysis failed.")
-            messagebox.showerror("Analysis failed", outcome.error)
+            self._status_label.setText("Analysis failed.")
+            QMessageBox.critical(self, "Analysis failed", outcome.error)
             return
 
         all_findings = list(outcome.findings)
-        all_findings.sort(key=lambda f: list(Severity).index(f.severity), reverse=True)
+        all_findings.sort(
+            key=lambda f: (list(Severity).index(f.severity), f.score), reverse=True
+        )
         self._last_findings = all_findings
 
         self._populate_results(all_findings)
-        self._export_button.configure(state=tk.NORMAL if all_findings else tk.DISABLED)
-        self._status_label.configure(
-            text=f"Done. {len(all_findings)} finding(s)."
-        )
+        self._export_button.setEnabled(bool(all_findings))
+        self._status_label.setText(f"Done. {len(all_findings)} finding(s).")
+        self._auto_export(all_findings)
+
+    def _auto_export(self, findings: list[CorrelationFinding]) -> None:
+        """Auto-save a report to the configured output directory, if any and non-empty.
+
+        Args:
+            findings: The findings from the just-completed run.
+        """
+        if not findings:
+            return
+        output_dir = self._output_dir_edit.text().strip()
+        if not output_dir:
+            logger.info(
+                "No output directory set; skipping auto-export. "
+                "Use 'Export a Copy...' to save a report manually."
+            )
+            return
+        target = Path(output_dir) / f"corrobora_report_{datetime.now(UTC):%Y%m%dT%H%M%SZ}.html"
+        try:
+            target.write_text(
+                findings_to_html(findings, title="Corrobora Findings Report"), encoding="utf-8"
+            )
+        except OSError as exc:
+            logger.error("Auto-export to %s failed: %s", target, exc)
+            return
+        logger.info("Report saved to %s", target)
 
     # -- results display --------------------------------------------------
 
     def _clear_results(self) -> None:
         """Clear the findings table and detail pane."""
-        self._tree.delete(*self._tree.get_children())
+        self._results_table.setRowCount(0)
         self._set_detail_text("")
 
     def _populate_results(self, findings: list[CorrelationFinding]) -> None:
-        """Populate the findings Treeview.
+        """Populate the findings table.
 
         Args:
             findings: The findings to display, in display order.
         """
-        self._clear_results()
+        self._results_table.setSortingEnabled(False)
+        self._results_table.setRowCount(len(findings))
         for index, finding in enumerate(findings):
-            self._tree.insert(
-                "",
-                tk.END,
-                iid=str(index),
-                values=(finding.severity.value.upper(), finding.rule_name, finding.description),
-                tags=(finding.severity.value,),
+            severity_item = _SortableItem(
+                finding.severity.value.upper(), list(Severity).index(finding.severity)
             )
+            severity_item.setForeground(QColor(_SEVERITY_COLORS[finding.severity]))
+            severity_item.setData(Qt.UserRole, index)
+            score_item = _SortableItem(str(finding.score), finding.score)
+            self._results_table.setItem(index, 0, severity_item)
+            self._results_table.setItem(index, 1, score_item)
+            self._results_table.setItem(index, 2, QTableWidgetItem(finding.rule_name))
+            self._results_table.setItem(index, 3, QTableWidgetItem(finding.description))
+        self._results_table.setSortingEnabled(True)
 
-    def _on_finding_selected(self, _event: object) -> None:
+    def _on_finding_selected(self) -> None:
         """Show full detail for the selected finding in the detail pane."""
-        selection = self._tree.selection()
-        if not selection:
+        row = self._results_table.currentRow()
+        if row < 0:
             return
-        index = int(selection[0])
-        finding = self._last_findings[index]
+        severity_item = self._results_table.item(row, 0)
+        if severity_item is None:
+            return
+        finding = self._last_findings[severity_item.data(Qt.UserRole)]
         detail = (
             f"Rule: {finding.rule_name}\n"
-            f"Severity: {finding.severity.value.upper()}\n\n"
+            f"Severity: {finding.severity.value.upper()}\n"
+            f"Score: {finding.score}/100\n\n"
             f"{finding.description}\n\n"
             f"Evidence:\n"
             + "\n".join(f"  - {e}" for e in finding.evidence)
@@ -1537,117 +1782,26 @@ class CorroboraApp:  # pylint: disable=too-many-instance-attributes,too-few-publ
         Args:
             text: The text to display.
         """
-        self._detail_text.configure(state=tk.NORMAL)
-        self._detail_text.delete("1.0", tk.END)
-        self._detail_text.insert(tk.END, text)
-        self._detail_text.configure(state=tk.DISABLED)
-
-    def _sort_by(self, column: str) -> None:
-        """Sort the findings table by a given column.
-
-        Args:
-            column: The column identifier to sort by (``"severity"``
-                or ``"rule"``).
-        """
-        if column == "severity":
-            self._last_findings.sort(
-                key=lambda f: list(Severity).index(f.severity), reverse=True
-            )
-        elif column == "rule":
-            self._last_findings.sort(key=lambda f: f.rule_name)
-        self._populate_results(self._last_findings)
+        self._detail_text.setPlainText(text)
 
     # -- log panel ----------------------------------------------------------
 
     def _append_log(self, message: str) -> None:
-        """Append a line to the log panel and scroll to the bottom.
+        """Append a line to the log panel.
 
         Args:
             message: The formatted log line to append.
         """
-        self._log_text.configure(state=tk.NORMAL)
-        self._log_text.insert(tk.END, message + "\n")
-        self._log_text.see(tk.END)
-        self._log_text.configure(state=tk.DISABLED)
-
-    # -- case ingest ----------------------------------------------------------
-
-    def _load_case_folder(self) -> None:
-        """Prompt for a case folder, auto-discover artifacts, and populate panels."""
-        folder = filedialog.askdirectory(title="Select case folder")
-        if not folder:
-            return
-        self._load_case_from_path(folder)
-
-    def _load_case_zip(self) -> None:
-        """Prompt for a case .zip archive, auto-discover artifacts, and populate panels."""
-        zip_path = filedialog.askopenfilename(
-            title="Select case .zip archive", filetypes=[("Zip archives", "*.zip")]
-        )
-        if not zip_path:
-            return
-        self._load_case_from_path(zip_path)
-
-    def _load_case_from_path(self, path: str) -> None:
-        """Discover artifacts at a path and populate all four source panels.
-
-        Args:
-            path: A case folder or ``.zip`` archive path, as chosen by
-                the user.
-        """
-        self._status_label.configure(text="Scanning case...")
-        self.root.update_idletasks()
-        try:
-            artifacts = load_case(path)
-        except InvalidCasePathError as exc:
-            self._status_label.configure(text="Case scan failed.")
-            messagebox.showerror("Case scan failed", str(exc))
-            return
-
-        self._apply_discovered_artifacts(artifacts)
-
-        self._status_label.configure(
-            text=f"Loaded case: {artifacts.total_count} artifact(s) found."
-        )
-        if artifacts.total_count == 0:
-            messagebox.showwarning(
-                "No artifacts found",
-                f"No recognized EVTX, registry, Prefetch, or MFT files were found "
-                f"in:\n{path}\n\n"
-                f"({artifacts.unclassified_count} other file(s) were present but "
-                f"not recognized.)",
-            )
-
-    def _apply_discovered_artifacts(self, artifacts: DiscoveredArtifacts) -> None:
-        """Populate all four source panels from a discovery result.
-
-        Args:
-            artifacts: The artifacts discovered by :func:`load_case`.
-        """
-        self._evtx_panel.set_paths(list(artifacts.evtx_paths))
-        self._registry_panel.set_paths(list(artifacts.registry_paths))
-        self._prefetch_panel.set_paths(list(artifacts.prefetch_paths))
-        self._mft_panel.set_paths(list(artifacts.mft_paths))
-        logger.info(
-            "Case loaded: %d EVTX, %d registry, %d Prefetch, %d MFT "
-            "(%d file(s) unclassified).",
-            len(artifacts.evtx_paths),
-            len(artifacts.registry_paths),
-            len(artifacts.prefetch_paths),
-            len(artifacts.mft_paths),
-            artifacts.unclassified_count,
-        )
+        self._log_text.appendPlainText(message)
 
     # -- export / sample data -------------------------------------------------
 
     def _export_html(self) -> None:
-        """Export the current findings to an HTML report file."""
+        """Save a copy of the current findings to an HTML report file."""
         if not self._last_findings:
             return
-        target = filedialog.asksaveasfilename(
-            title="Save findings report",
-            defaultextension=".html",
-            filetypes=[("HTML files", "*.html")],
+        target, _selected_filter = QFileDialog.getSaveFileName(
+            self, "Save findings report", "corrobora_report.html", "HTML files (*.html)"
         )
         if not target:
             return
@@ -1655,31 +1809,40 @@ class CorroboraApp:  # pylint: disable=too-many-instance-attributes,too-few-publ
             document = findings_to_html(self._last_findings, title="Corrobora Findings Report")
             Path(target).write_text(document, encoding="utf-8")
         except OSError as exc:
-            messagebox.showerror("Export failed", str(exc))
+            QMessageBox.critical(self, "Export failed", str(exc))
             return
-        messagebox.showinfo("Export complete", f"Report saved to:\n{target}")
+        QMessageBox.information(self, "Export complete", f"Report saved to:\n{target}")
 
     def _generate_sample_mft(self) -> None:
-        """Generate a synthetic sample $MFT file and add it to the MFT panel."""
-        target = filedialog.asksaveasfilename(
-            title="Save sample $MFT file as",
-            defaultextension="",
-            initialfile="sample_MFT",
+        """Generate a synthetic sample $MFT file and offer to re-scan the evidence source."""
+        initial_dir = self._evidence_path_edit.text()
+        initial_path = str(Path(initial_dir) / "sample_MFT") if initial_dir else "sample_MFT"
+        target, _selected_filter = QFileDialog.getSaveFileName(
+            self, "Save sample $MFT file as", initial_path
         )
         if not target:
             return
         try:
             Path(target).write_bytes(generate_sample_mft_bytes())
         except OSError as exc:
-            messagebox.showerror("Failed to write sample file", str(exc))
+            QMessageBox.critical(self, "Failed to write sample file", str(exc))
             return
-        self._mft_panel._listbox.insert(tk.END, target)  # pylint: disable=protected-access
-        messagebox.showinfo(
-            "Sample data generated",
+
+        message = (
             "A synthetic $MFT file was created with one ordinary file, one "
-            "directory, and one deliberately timestomped file, and has been "
-            "added to the $MFT Files list. Click 'Run Analysis' to try it out.",
+            "directory, and one deliberately timestomped file."
         )
+        if self._evidence_path_edit.text():
+            reply = QMessageBox.question(
+                self,
+                "Sample data generated",
+                message + "\n\nRe-scan the evidence source to include it now?",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if reply == QMessageBox.Yes:
+                self._scan_evidence(self._evidence_path_edit.text())
+        else:
+            QMessageBox.information(self, "Sample data generated", message)
 
 
 def _configure_logging() -> None:
@@ -1690,9 +1853,10 @@ def _configure_logging() -> None:
 def main() -> None:
     """Launch the Corrobora GUI application."""
     _configure_logging()
-    root = tk.Tk()
-    CorroboraApp(root)
-    root.mainloop()
+    app = QApplication(sys.argv)
+    window = CorroboraMainWindow()
+    window.show()
+    sys.exit(app.exec_())
 
 
 if __name__ == "__main__":
