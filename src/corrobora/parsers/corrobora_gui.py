@@ -32,8 +32,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QColor, QIcon, QPixmap
+from PyQt5.QtCore import QModelIndex, QObject, QRect, Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -49,6 +49,8 @@ from PyQt5.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -1102,6 +1104,92 @@ class _SortableItem(QTableWidgetItem):  # pylint: disable=too-few-public-methods
         return super().__lt__(other)
 
 
+# Corroboration-score fill colors, bucketed by strength. Deliberately the
+# same palette as _SEVERITY_COLORS for visual consistency, but keyed by
+# score magnitude rather than the Severity enum -- score and severity are
+# independent axes (see CorrelationFinding.score's docstring), so a
+# HIGH-severity finding can still have a low score and vice versa.
+_SCORE_BAR_COLORS: tuple[tuple[int, str], ...] = (
+    (75, "#c0392b"),
+    (50, "#d68910"),
+    (25, "#2471a3"),
+    (0, "#566573"),
+)
+
+
+def _score_bar_color(score: int) -> QColor:
+    """Return the fill color for a given corroboration score.
+
+    Args:
+        score: A 0-100 corroboration score.
+
+    Returns:
+        The color for the highest threshold ``score`` meets or exceeds.
+    """
+    for threshold, color in _SCORE_BAR_COLORS:
+        if score >= threshold:
+            return QColor(color)
+    return QColor(_SCORE_BAR_COLORS[-1][1])
+
+
+class _ScoreBarDelegate(QStyledItemDelegate):
+    """Paints a table cell as a filled bar followed by a percentage label.
+
+    Renders each finding's corroboration score visually (e.g. a mostly
+    filled bar for a strong score) rather than as a bare number, while
+    leaving the underlying :class:`_SortableItem` untouched -- sorting
+    still works exactly as before, since this only changes how the
+    existing item is painted, not what data or sort key it holds.
+    """
+
+    _BAR_HEIGHT = 14
+    _EMPTY_COLOR = QColor("#e5e8ec")
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
+        """Paint the score bar and label for one cell.
+
+        Args:
+            painter: The active painter.
+            option: Style options for this cell (position, size, etc.).
+            index: The model index being painted.
+        """
+        try:
+            score = int(index.data())
+        except (TypeError, ValueError):
+            super().paint(painter, option, index)
+            return
+
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        label = f"{score}%"
+        label_width = painter.fontMetrics().horizontalAdvance(label)
+        cell = option.rect
+        bar_width = max(cell.width() - label_width - 16, 10)
+        bar_rect = QRect(
+            cell.left() + 4,
+            cell.top() + (cell.height() - self._BAR_HEIGHT) // 2,
+            bar_width,
+            self._BAR_HEIGHT,
+        )
+
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(self._EMPTY_COLOR)
+        painter.drawRoundedRect(bar_rect, 3, 3)
+
+        fill_width = int(bar_rect.width() * min(max(score, 0), 100) / 100)
+        if fill_width > 0:
+            fill_rect = QRect(bar_rect.x(), bar_rect.y(), fill_width, bar_rect.height())
+            painter.setBrush(_score_bar_color(score))
+            painter.drawRoundedRect(fill_rect, 3, 3)
+
+        painter.setPen(QColor("#1a1a1a"))
+        label_rect = QRect(bar_rect.right() + 8, cell.top(), label_width + 4, cell.height())
+        painter.drawText(label_rect, Qt.AlignVCenter | Qt.AlignLeft, label)
+
+        painter.restore()
+
+
 # --------------------------------------------------------------------------
 # Styling
 # --------------------------------------------------------------------------
@@ -1388,6 +1476,13 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         self._results_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._results_table.setSortingEnabled(True)
         self._results_table.horizontalHeader().setStretchLastSection(True)
+        self._results_table.setColumnWidth(1, 140)
+        # Kept as an instance attribute, not a local: PyQt5 doesn't keep its
+        # own strong reference to a delegate, so without this it would be
+        # garbage-collected and the column would silently fall back to
+        # plain-text rendering.
+        self._score_delegate = _ScoreBarDelegate(self._results_table)
+        self._results_table.setItemDelegateForColumn(1, self._score_delegate)
         self._results_table.itemSelectionChanged.connect(self._on_finding_selected)
         group_layout.addWidget(self._results_table)
 
