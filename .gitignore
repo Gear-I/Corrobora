@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Corrobora-generated reports (HTML exports from the correlation engine,
+# the GUI's auto-save, or parser --export runs) -- these are run output,
+# not source, and can be large; never belongs in version control.
+*_report.html
+corrobora_report_*.html
