@@ -14,26 +14,32 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from corrobora.parsers.correlation_engine import (
-    CorrelationContext,
-    CorrelationEngine,
-    CorrelationFinding,
-    CorrelationRule,
-    EvtxEntry,
-    EvtxRecordNumberGapRule,
-    MftEntry,
-    MftTimestompingRule,
-    PrefetchEntry,
-    PrefetchExecutionWithoutEvtxRule,
-    PrefetchFilenameHashMismatchRule,
-    RegistryPersistenceWithoutExecutionRule,
-    RegistryValueEntry,
-    Severity,
-)
+import pytest
+
+from corrobora.parsers.correlation_engine import CorrelationEngine
 from corrobora.parsers.evtx import EventRecord
 from corrobora.parsers.mft import MftRecord
 from corrobora.parsers.prefetch import PrefetchRecord
 from corrobora.parsers.registry import RegistryValue
+from corrobora.rules.base import (
+    CorrelationContext,
+    CorrelationFinding,
+    CorrelationRule,
+    EvtxEntry,
+    MftEntry,
+    PrefetchEntry,
+    RegistryValueEntry,
+    Severity,
+)
+from corrobora.rules.integrity.evtx_record_gap import EvtxRecordNumberGapRule
+from corrobora.rules.integrity.mft_timestomping import MftTimestompingRule
+from corrobora.rules.integrity.prefetch_hash_mismatch import PrefetchFilenameHashMismatchRule
+from corrobora.rules.persistence.registry_vs_prefetch import (
+    RegistryPersistenceWithoutExecutionRule,
+)
+from corrobora.rules.program_execution.prefetch_vs_evtx import (
+    PrefetchExecutionWithoutEvtxRule,
+)
 
 UTC = timezone.utc
 
@@ -116,6 +122,43 @@ def _make_mft_record(
     )
 
 
+class TestCorrelationFindingScoreValidation:
+    """Tests for CorrelationFinding's score bounds check."""
+
+    def test_score_within_bounds_is_accepted(self) -> None:
+        finding = CorrelationFinding(
+            rule_name="test_rule",
+            severity=Severity.INFO,
+            description="test",
+            evidence=(),
+            source_paths=(),
+            score=0,
+        )
+        assert finding.score == 0
+
+    def test_score_below_zero_is_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            CorrelationFinding(
+                rule_name="test_rule",
+                severity=Severity.INFO,
+                description="test",
+                evidence=(),
+                source_paths=(),
+                score=-1,
+            )
+
+    def test_score_above_100_is_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            CorrelationFinding(
+                rule_name="test_rule",
+                severity=Severity.INFO,
+                description="test",
+                evidence=(),
+                source_paths=(),
+                score=101,
+            )
+
+
 class TestPrefetchExecutionWithoutEvtxRule:
     """Tests for cross-referencing Prefetch execution against EVTX events."""
 
@@ -140,6 +183,7 @@ class TestPrefetchExecutionWithoutEvtxRule:
         assert len(findings) == 1
         assert findings[0].rule_name == "prefetch_execution_without_evtx"
         assert findings[0].severity == Severity.MEDIUM
+        assert findings[0].score == 45
         assert "MALWARE.EXE" in findings[0].description
 
     def test_returns_no_findings_when_no_evtx_data_provided_at_all(self) -> None:
@@ -267,6 +311,7 @@ class TestRegistryPersistenceWithoutExecutionRule:
 
         assert len(findings) == 1
         assert findings[0].rule_name == "persistence_without_execution"
+        assert findings[0].score == 35
         assert "malware.exe" in findings[0].description
 
     def test_does_not_flag_when_prefetch_shows_execution(self) -> None:
@@ -400,6 +445,7 @@ class TestPrefetchFilenameHashMismatchRule:
 
         assert len(findings) == 1
         assert findings[0].severity == Severity.HIGH
+        assert findings[0].score == 90
 
     def test_does_not_flag_match(self) -> None:
         prefetch = _make_prefetch(filename_hash_matches=True)
@@ -445,6 +491,7 @@ class TestMftTimestompingRule:
         assert len(findings) == 1
         assert findings[0].severity == Severity.HIGH
         assert findings[0].rule_name == "mft_timestomping_detected"
+        assert findings[0].score == 90
         assert "creation_time" in findings[0].evidence[0]
 
     def test_does_not_flag_normal_record(self) -> None:
@@ -500,6 +547,7 @@ class TestEvtxRecordNumberGapRule:
 
         assert len(findings) == 1
         assert findings[0].severity == Severity.INFO
+        assert findings[0].score == 10
         assert "5 small gap(s)" in findings[0].description
         assert "totaling 5 missing record(s)" in findings[0].description
 
@@ -516,6 +564,7 @@ class TestEvtxRecordNumberGapRule:
 
         assert len(findings) == 1
         assert findings[0].severity == Severity.MEDIUM
+        assert findings[0].score == 55
         assert "15 consecutive missing record(s)" in findings[0].description
 
     def test_mixed_small_and_significant_gaps_in_one_file(self) -> None:
