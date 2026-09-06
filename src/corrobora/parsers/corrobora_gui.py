@@ -78,6 +78,11 @@ from .correlation_engine import (  # pylint: disable=wrong-import-position
     Severity,
     build_context,
 )
+from ..rules.app_corroboration import (  # pylint: disable=wrong-import-position
+    DISCLAIMER,
+    AppCorroboration,
+    build_app_corroboration,
+)
 from ..rules.base import CorrelationRule  # pylint: disable=wrong-import-position
 from ..rules.rule_registry import RULE_REGISTRY  # pylint: disable=wrong-import-position
 
@@ -751,12 +756,15 @@ class AnalysisOutcome:
             succeeded.
         context: The parsed artifact context the findings were
             generated from, if the run succeeded.
+        app_corroboration: Per-application cross-artifact
+            corroboration summaries, if the run succeeded.
         error: A description of what went wrong, if the run failed.
             ``None`` on success.
     """
 
     findings: tuple[CorrelationFinding, ...]
     context: CorrelationContext | None
+    app_corroboration: tuple[AppCorroboration, ...]
     error: str | None
 
 
@@ -796,14 +804,17 @@ def run_analysis(
         )
         engine = CorrelationEngine(rules=rules)
         findings = tuple(engine.run(context))
+        app_corroboration = tuple(build_app_corroboration(context))
     except Exception as exc:  # pylint: disable=broad-exception-caught
         # Deliberately broad: this is the top-level boundary between the
         # background worker thread and the GUI; any failure here must be
         # reported to the user rather than silently killing the thread.
         logger.exception("Analysis failed")
-        return AnalysisOutcome(findings=(), context=None, error=str(exc))
+        return AnalysisOutcome(findings=(), context=None, app_corroboration=(), error=str(exc))
 
-    return AnalysisOutcome(findings=findings, context=context, error=None)
+    return AnalysisOutcome(
+        findings=findings, context=context, app_corroboration=app_corroboration, error=None
+    )
 
 
 def findings_to_html(findings: list[CorrelationFinding], title: str = "Corrobora Findings") -> str:
@@ -1352,6 +1363,7 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
 
         self._discovered: DiscoveredArtifacts | None = None
         self._last_findings: list[CorrelationFinding] = []
+        self._last_app_corroboration: list[AppCorroboration] = []
         self._last_report_path: Path | None = None
         self._analysis_running = False
         self._artifact_items: dict[str, QTreeWidgetItem] = {}
@@ -1373,7 +1385,9 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         self._build_artifact_categories_section(layout)
         self._build_validation_rules_section(layout)
         self._build_run_controls(layout)
-        self._build_results_panel(layout)
+        self._build_app_corroboration_panel(layout)
+        self._build_rule_findings_panel(layout)
+        self._build_finding_detail_panel(layout)
         self._build_log_panel(layout)
         layout.addStretch(1)
 
@@ -1728,9 +1742,42 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
 
         layout.addWidget(control_bar)
 
-    def _build_results_panel(self, layout: QVBoxLayout) -> None:
-        """Build the findings table and its detail pane."""
-        group = QGroupBox("Findings")
+    def _build_app_corroboration_panel(self, layout: QVBoxLayout) -> None:
+        """Build the per-application corroboration tree.
+
+        Read-only results, not a selection tree: top-level rows are
+        one per detected application (name, corroboration score);
+        children are one per artifact type, showing whether that type
+        corroborates the application's presence.
+        """
+        group = QGroupBox("Application Corroboration")
+        group_layout = QVBoxLayout(group)
+
+        self._corroboration_tree = QTreeWidget()
+        self._corroboration_tree.setHeaderLabels(["Application", "Score"])
+        self._corroboration_tree.setMaximumHeight(180)
+        # Reuses the same delegate instance as the rule-findings table's
+        # Score column below: it already falls back to plain-text
+        # rendering for non-numeric cell text (see _ScoreBarDelegate.paint),
+        # so it renders a bar for the numeric app-level score rows and
+        # plain "Found"/"Not Found" text for the child rows safely.
+        self._score_delegate = _ScoreBarDelegate(self._corroboration_tree)
+        self._corroboration_tree.setItemDelegateForColumn(1, self._score_delegate)
+        self._corroboration_tree.itemSelectionChanged.connect(
+            self._on_app_corroboration_selected
+        )
+        group_layout.addWidget(self._corroboration_tree)
+        layout.addWidget(group)
+
+    def _build_rule_findings_panel(self, layout: QVBoxLayout) -> None:
+        """Build the rule-based findings table.
+
+        Surfaces detections that aren't inherently about one specific
+        application -- filename/hash mismatches, EVTX record-number
+        gaps, timestomping -- alongside the program-execution/
+        persistence rules that are.
+        """
+        group = QGroupBox("Rule-Based Findings")
         group_layout = QVBoxLayout(group)
 
         self._results_table = QTableWidget(0, 4)
@@ -1741,17 +1788,22 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         self._results_table.setSortingEnabled(True)
         self._results_table.horizontalHeader().setStretchLastSection(True)
         self._results_table.setColumnWidth(1, 140)
-        # Kept as an instance attribute, not a local: PyQt5 doesn't keep its
-        # own strong reference to a delegate, so without this it would be
-        # garbage-collected and the column would silently fall back to
-        # plain-text rendering.
-        self._score_delegate = _ScoreBarDelegate(self._results_table)
         self._results_table.setItemDelegateForColumn(1, self._score_delegate)
         self._results_table.itemSelectionChanged.connect(self._on_finding_selected)
         group_layout.addWidget(self._results_table)
 
         layout.addWidget(group)
 
+    def _build_finding_detail_panel(self, layout: QVBoxLayout) -> None:
+        """Build the detail pane shared by both results views above.
+
+        "Application Corroboration" and "Rule-Based Findings" answer
+        different questions -- the former "how many independent
+        artifacts corroborate this program's presence," the latter
+        "what specific rule-based anomaly was detected" -- so they're
+        kept as separate views rather than forced into one shape, but
+        both drive this same detail pane.
+        """
         detail_group = QGroupBox("Finding Detail")
         detail_layout = QVBoxLayout(detail_group)
         self._detail_text = QPlainTextEdit()
@@ -1949,7 +2001,14 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         )
         self._last_findings = all_findings
 
+        # Worst-corroborated applications (most forensically interesting)
+        # surface first, mirroring the severity-descending sort above.
+        self._last_app_corroboration = sorted(
+            outcome.app_corroboration, key=lambda a: a.score
+        )
+
         self._populate_results(all_findings)
+        self._populate_app_corroboration(self._last_app_corroboration)
         self._export_button.setEnabled(bool(all_findings))
         self._status_label.setText(f"Done. {len(all_findings)} finding(s).")
         self._auto_export(all_findings)
@@ -1984,9 +2043,51 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
     # -- results display --------------------------------------------------
 
     def _clear_results(self) -> None:
-        """Clear the findings table and detail pane."""
+        """Clear both results views and the detail pane."""
         self._results_table.setRowCount(0)
+        self._corroboration_tree.clear()
         self._set_detail_text("")
+
+    def _populate_app_corroboration(self, app_corroboration: list[AppCorroboration]) -> None:
+        """Populate the Application Corroboration tree.
+
+        Args:
+            app_corroboration: The corroboration summaries to display,
+                already in display order (see :meth:`_handle_analysis_result`).
+        """
+        self._corroboration_tree.clear()
+        for index, app in enumerate(app_corroboration):
+            top_item = QTreeWidgetItem(self._corroboration_tree, [app.application, str(app.score)])
+            top_item.setData(0, Qt.UserRole, index)
+            for presence in app.presence:
+                status = "✓ Found" if presence.found else "✗ Not Found"
+                child = QTreeWidgetItem(top_item, [presence.artifact_type, status])
+                child.setForeground(1, QColor("#2e7d32" if presence.found else "#c0392b"))
+            top_item.setExpanded(True)
+
+    def _on_app_corroboration_selected(self) -> None:
+        """Show the selected application's full corroboration detail."""
+        items = self._corroboration_tree.selectedItems()
+        if not items:
+            return
+        item = items[0]
+        top_item = item if item.parent() is None else item.parent()
+        index = top_item.data(0, Qt.UserRole)
+        if index is None:
+            return
+        app = self._last_app_corroboration[index]
+        detail = (
+            f"Application: {app.application}\n"
+            f"Corroboration score: {app.score}/100\n\n"
+            f"{app.assessment}\n\n"
+            + "\n".join(
+                f"  - {p.artifact_type}: "
+                f"{'Found' if p.found else 'Not found'} ({p.detail})"
+                for p in app.presence
+            )
+            + f"\n\n{DISCLAIMER}"
+        )
+        self._set_detail_text(detail)
 
     def _populate_results(self, findings: list[CorrelationFinding]) -> None:
         """Populate the findings table.
