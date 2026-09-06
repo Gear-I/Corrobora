@@ -143,7 +143,7 @@ class TestLoadCaseFromZip:
     def test_raises_on_non_zip_non_directory_file(self, tmp_path: Path) -> None:
         text_file = tmp_path / "notes.txt"
         _touch(text_file)
-        with pytest.raises(InvalidCasePathError, match="directory or a .zip"):
+        with pytest.raises(InvalidCasePathError, match="directory, a .zip file, or a disk image"):
             load_case(text_file)
 
     def test_raises_on_corrupt_zip(self, tmp_path: Path) -> None:
@@ -158,3 +158,33 @@ class TestLoadCaseFromZip:
         _touch(tmp_path / "Security.evtx")
         result = load_case(tmp_path)
         assert len(result.evtx_paths) == 1
+
+
+class TestLoadCaseFromDiskImage:
+    """Tests that load_case() dispatches recognized image extensions correctly.
+
+    Only tests the *wiring* (that an image-shaped extension routes to
+    corrobora.parsers.disk_image rather than the generic "must be a
+    directory/.zip" error) using deliberately invalid image content --
+    building a real, valid disk image is out of scope for this test
+    suite (see tests/test_disk_image.py's module docstring). Skips if
+    the optional 'images' extra isn't installed.
+    """
+
+    def test_e01_extension_is_routed_to_disk_image_not_generic_error(
+        self, tmp_path: Path
+    ) -> None:
+        pytest.importorskip("pyewf")
+        fake_image = tmp_path / "case.E01"
+        fake_image.write_bytes(b"not a real EWF file" * 10)
+        with pytest.raises(InvalidCasePathError, match="disk image"):
+            load_case(fake_image)
+
+    def test_raw_extension_is_routed_to_disk_image_not_generic_error(
+        self, tmp_path: Path
+    ) -> None:
+        pytest.importorskip("pytsk3")
+        fake_image = tmp_path / "case.raw"
+        fake_image.write_bytes(b"\x00" * 4096)
+        with pytest.raises(InvalidCasePathError, match="NTFS filesystem"):
+            load_case(fake_image)

@@ -1438,13 +1438,19 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         layout.addWidget(header)
 
     def _build_evidence_section(self, layout: QVBoxLayout) -> None:
-        """Build the "Evidence Source" section: one folder/zip field + browse buttons."""
+        """Build the "Evidence Source" section: one field + browse buttons.
+
+        Accepts a folder, a case ``.zip``, or a disk image (E01/EWF,
+        VHD/VHDX, VMDK, raw/dd) -- all three feed the same
+        :meth:`_scan_evidence`, since :func:`case_ingest.load_case`
+        already dispatches on what it's given.
+        """
         group = QGroupBox("Evidence Source")
         group_layout = QHBoxLayout(group)
         self._evidence_path_edit = QLineEdit()
         self._evidence_path_edit.setReadOnly(True)
         self._evidence_path_edit.setPlaceholderText(
-            "Select an evidence folder or a case .zip archive..."
+            "Select an evidence folder, a case .zip archive, or a disk image..."
         )
         group_layout.addWidget(self._evidence_path_edit, stretch=1)
         browse_folder_button = QPushButton("Browse Folder...")
@@ -1453,6 +1459,9 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         browse_zip_button = QPushButton("...or a ZIP")
         browse_zip_button.clicked.connect(self._browse_evidence_zip)
         group_layout.addWidget(browse_zip_button)
+        browse_image_button = QPushButton("...or a Disk Image")
+        browse_image_button.clicked.connect(self._browse_evidence_image)
+        group_layout.addWidget(browse_image_button)
         layout.addWidget(group)
 
     def _build_output_section(self, layout: QVBoxLayout) -> None:
@@ -1831,12 +1840,32 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         self._evidence_path_edit.setText(zip_path)
         self._scan_evidence(zip_path)
 
+    def _browse_evidence_image(self) -> None:
+        """Prompt for a disk image and scan it.
+
+        Extraction (via :mod:`corrobora.parsers.disk_image`, an
+        optional dependency -- see ``pip install corrobora[images]``)
+        happens inside :func:`case_ingest.load_case`, called from
+        :meth:`_scan_evidence` exactly like the folder/zip cases; a
+        missing optional dependency surfaces as a normal
+        :class:`InvalidCasePathError` dialog there, not a crash here.
+        """
+        image_path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "Select a disk image",
+            filter="Disk images (*.E01 *.Ex01 *.vhd *.vhdx *.vmdk *.raw *.img *.dd)",
+        )
+        if not image_path:
+            return
+        self._evidence_path_edit.setText(image_path)
+        self._scan_evidence(image_path)
+
     def _scan_evidence(self, path: str) -> None:
         """Discover artifacts at a path and update the category checklist.
 
         Args:
-            path: A case folder or ``.zip`` archive path, as chosen by
-                the user.
+            path: A case folder, ``.zip`` archive, or disk image path,
+                as chosen by the user.
         """
         self._status_label.setText("Scanning case...")
         QApplication.processEvents()

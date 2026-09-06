@@ -67,6 +67,15 @@ _KNOWN_HIVE_NAMES = frozenset(
     {"system", "software", "sam", "security", "default", "ntuser.dat", "usrclass.dat"}
 )
 
+# Mirrors disk_image.IMAGE_SUFFIXES -- duplicated (not imported) so that
+# recognizing "this path looks like a disk image" doesn't require
+# importing disk_image.py (and therefore its pytsk3/pyewf/pyvhdi/pyvmdk
+# dependencies) for ordinary folder/zip usage. Keep in sync if that set
+# changes.
+_IMAGE_SUFFIXES = frozenset(
+    {".e01", ".ex01", ".vhd", ".vhdx", ".vmdk", ".raw", ".img", ".dd"}
+)
+
 
 # --------------------------------------------------------------------------
 # Exceptions
@@ -129,8 +138,13 @@ class DiscoveredArtifacts:
 # --------------------------------------------------------------------------
 
 
-def _classify_file(path: Path) -> str | None:
+def classify_file(path: Path) -> str | None:
     """Classify a single file by its likely artifact type.
+
+    Public (not module-private) since :mod:`corrobora.parsers.disk_image`
+    also needs it, to apply the exact same filename-based classification
+    rules while walking a disk image's filesystem instead of a real
+    directory tree.
 
     Args:
         path: The file to classify.
@@ -191,7 +205,7 @@ def discover_artifacts(folder: str | Path) -> DiscoveredArtifacts:
             logger.warning("Skipping unreadable path '%s': %s", entry, exc)
             continue
 
-        category = _classify_file(entry)
+        category = classify_file(entry)
         if category == "evtx":
             evtx.append(str(entry))
         elif category == "registry":
@@ -262,7 +276,7 @@ def _safe_extract_zip(zip_path: Path, destination: Path) -> None:
 
 
 def load_case(path: str | Path) -> DiscoveredArtifacts:
-    """Discover artifacts from a case folder or a ``.zip`` archive of one.
+    """Discover artifacts from a case folder, a ``.zip``, or a disk image.
 
     If ``path`` points to a ``.zip`` file, it is safely extracted to
     a fresh temporary directory first (which is left on disk for the
@@ -270,16 +284,25 @@ def load_case(path: str | Path) -> DiscoveredArtifacts:
     downstream parsers -- it is not automatically cleaned up, since
     the caller may still need the paths afterward).
 
+    If ``path`` looks like a disk image (E01/EWF, VHD/VHDX, VMDK, or
+    raw/dd, by extension), artifact extraction is delegated to
+    :mod:`corrobora.parsers.disk_image` -- imported lazily here, not
+    at module level, so this module stays free of that capability's
+    heavier C-extension dependencies for callers who only ever use
+    folder/zip case ingest.
+
     Args:
-        path: Path to a case folder, or a ``.zip`` archive of one.
+        path: Path to a case folder, a ``.zip`` archive of one, or a
+            disk image.
 
     Returns:
         The classified artifact paths found.
 
     Raises:
-        InvalidCasePathError: If ``path`` does not exist, is neither
-            a directory nor a ``.zip`` file, or (for a zip) fails to
-            open or extract safely.
+        InvalidCasePathError: If ``path`` does not exist, isn't a
+            recognized kind of case source, a zip fails to open or
+            extract safely, a disk image fails to open, or (for a
+            disk image) the optional ``images`` extra isn't installed.
     """
     case_path = Path(path)
     if not case_path.exists():
@@ -294,8 +317,25 @@ def load_case(path: str | Path) -> DiscoveredArtifacts:
         _safe_extract_zip(case_path, temp_dir)
         return discover_artifacts(temp_dir)
 
+    if case_path.is_file() and case_path.suffix.lower() in _IMAGE_SUFFIXES:
+        try:
+            # disk_image.py imports several names back from this module
+            # (DiscoveredArtifacts, discover_artifacts, etc.) to avoid
+            # duplicating discovery logic, which makes this a real edge
+            # in the static import graph -- but it's runtime-safe: this
+            # import only ever fires lazily, well after both modules
+            # have already finished loading, never during either
+            # module's own top-level execution.
+            from . import disk_image  # pylint: disable=import-outside-toplevel,cyclic-import
+        except ImportError as exc:
+            raise InvalidCasePathError(
+                "Disk image support requires the optional 'images' extra: "
+                "pip install corrobora[images]"
+            ) from exc
+        return disk_image.load_disk_image(case_path)
+
     raise InvalidCasePathError(
-        f"Case path must be a directory or a .zip file, got: {case_path}"
+        f"Case path must be a directory, a .zip file, or a disk image, got: {case_path}"
     )
 
 

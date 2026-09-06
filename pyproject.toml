@@ -40,6 +40,16 @@ dependencies = [
 
 [project.optional-dependencies]
 progress = ["tqdm>=4.60.0"]
+# Disk image support (E01/EWF, VHD/VHDX, VMDK, raw/dd) -- kept optional
+# since pytsk3 and the libyal image-format bindings are heavier
+# C-extension dependencies that folder/zip-only users don't need.
+# See src/corrobora/parsers/disk_image.py.
+images = [
+    "pytsk3>=20260715",
+    "libewf-python>=20240506",
+    "libvhdi-python>=20251119",
+    "libvmdk-python>=20260714",
+]
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.5.0",
@@ -100,5 +110,15 @@ disable = ["duplicate-code"]
 # PyQt5's sip-based C extensions commonly trigger false no-member /
 # no-name-in-module findings (e.g. Qt.AlignCenter, pyqtSignal); allow-listing
 # lets pylint import them for real introspection instead of guessing.
-extension-pkg-allow-list = ["pyscca", "PyQt5", "PyQt5.QtCore", "PyQt5.QtGui", "PyQt5.QtWidgets"]
+extension-pkg-allow-list = [
+    "pyscca",
+    "PyQt5",
+    "PyQt5.QtCore",
+    "PyQt5.QtGui",
+    "PyQt5.QtWidgets",
+    "pytsk3",
+    "pyewf",
+    "pyvhdi",
+    "pyvmdk",
+]
  

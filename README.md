@@ -30,6 +30,11 @@ signs of deliberate backdating (timestomping).
 - **Correlation engine** -- a rule-based, fully deterministic (no AI/ML)
   engine that cross-references all four artifact types to surface
   anti-forensic indicators, ranked by severity.
+- **Disk image support** *(optional)* -- point Corrobora directly at a
+  raw forensic disk image (E01/EWF, VHD/VHDX, VMDK, or raw/dd) instead
+  of an already-extracted folder; known artifacts are extracted
+  straight out of the image's NTFS filesystem, no mounting required.
+  Requires `pip install corrobora[images]`.
 - **Desktop GUI** -- a PyQt5 application for running the full pipeline
   interactively: point it at one evidence source, choose which
   artifact and validation-rule categories to run, and browse
@@ -91,7 +96,7 @@ built for Windows forensic artifacts specifically).
 | `Corrobora-prefetch` | Parse `.pf` file(s) or a folder of them |
 | `Corrobora-mft` | Parse a raw `$MFT` file and detect timestomping |
 | `Corrobora-correlate` | Run the full cross-artifact correlation engine |
-| `Corrobora-case` | Auto-discover artifacts in a case folder or `.zip` |
+| `Corrobora-case` | Auto-discover artifacts in a case folder, `.zip`, or disk image |
 | `Corrobora-gui` | Launch the desktop GUI |
 
 For development (running the test suite and linters):
@@ -104,6 +109,12 @@ For progress bars during large EVTX parses:
 
 ```powershell
 pip install -e ".[progress]"
+```
+
+For disk image support (E01/EWF, VHD/VHDX, VMDK, raw/dd):
+
+```powershell
+pip install -e ".[images]"
 ```
 
 ### Running commands from any folder
@@ -161,6 +172,9 @@ Corrobora-correlate --evtx Security.evtx --registry NTUSER.DAT \
 
 # Auto-discover artifacts in a case folder or zip, then analyze
 Corrobora-case "C:\triage\case001" --analyze
+
+# Or point it straight at a disk image instead (requires the 'images' extra)
+Corrobora-case "C:\evidence\case001.E01" --analyze
 
 # Launch the GUI
 Corrobora-gui
