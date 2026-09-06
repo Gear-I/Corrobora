@@ -35,7 +35,6 @@ from pathlib import Path
 from PyQt5.QtCore import QModelIndex, QObject, QRect, Qt, QThread, QUrl, pyqtSignal
 from PyQt5.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import (
-    QAbstractItemView,
     QApplication,
     QFileDialog,
     QGroupBox,
@@ -50,8 +49,6 @@ from PyQt5.QtWidgets import (
     QScrollArea,
     QStyledItemDelegate,
     QStyleOptionViewItem,
-    QTableWidget,
-    QTableWidgetItem,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -1112,37 +1109,6 @@ class AnalysisWorker(QObject):  # pylint: disable=too-few-public-methods
         self.finished.emit(run_analysis(*self._args))
 
 
-class _SortableItem(QTableWidgetItem):  # pylint: disable=too-few-public-methods
-    """A table item that sorts by a stored numeric key, not its displayed text.
-
-    ``QTableWidgetItem``'s default sort compares displayed text, which
-    would sort severities alphabetically ("HIGH" before "LOW") and
-    scores lexicographically ("9" after "10") instead of by their real
-    ordering.
-
-    Note:
-        ``too-few-public-methods`` is intentionally suppressed: this
-        class only needs to override ``__lt__`` (a dunder method, not
-        counted as "public" by this check) to change sort behavior --
-        it isn't missing an API, it has exactly the one it needs.
-    """
-
-    def __init__(self, text: str, sort_key: float) -> None:
-        """Initialize the item.
-
-        Args:
-            text: The text to display.
-            sort_key: The numeric value to sort by instead of ``text``.
-        """
-        super().__init__(text)
-        self._sort_key = sort_key
-
-    def __lt__(self, other: object) -> bool:
-        if isinstance(other, _SortableItem):
-            return self._sort_key < other._sort_key
-        return super().__lt__(other)
-
-
 # Corroboration-score fill colors, bucketed by strength. Deliberately the
 # same palette as _SEVERITY_COLORS for visual consistency, but keyed by
 # score magnitude rather than the Severity enum -- score and severity are
@@ -1172,13 +1138,14 @@ def _score_bar_color(score: int) -> QColor:
 
 
 class _ScoreBarDelegate(QStyledItemDelegate):
-    """Paints a table cell as a filled bar followed by a percentage label.
+    """Paints a tree/table cell as a filled bar followed by a percentage label.
 
-    Renders each finding's corroboration score visually (e.g. a mostly
-    filled bar for a strong score) rather than as a bare number, while
-    leaving the underlying :class:`_SortableItem` untouched -- sorting
-    still works exactly as before, since this only changes how the
-    existing item is painted, not what data or sort key it holds.
+    Renders a corroboration score visually (e.g. a mostly filled bar
+    for a strong score) rather than as a bare number. Falls back to
+    plain-text rendering for any cell whose text isn't a bare integer
+    (see :meth:`paint`), so it's safe to reuse across every column
+    it's attached to -- including tree columns that mix numeric score
+    rows with non-numeric "Found"/"Not Found" rows.
     """
 
     _BAR_HEIGHT = 14
@@ -1233,10 +1200,8 @@ class _ScoreBarDelegate(QStyledItemDelegate):
 # Styling
 # --------------------------------------------------------------------------
 
-# Color palette matched to DLEAPP's actual GUI theme (dleappGUI.py), not an
-# invented one, per the request to make Corrobora's GUI feel like DLEAPP's:
-# a plum/aubergine base, grey input surfaces, a blue accent for actions, and
-# cream text.
+# A plum/aubergine base, grey input surfaces, a blue accent for actions,
+# and cream text -- a distinctive palette for Corrobora's identity.
 _THEME_BG = "#5F3A5C"
 _THEME_PANEL = "#6E4569"
 _THEME_BORDER = "#402A3E"
@@ -1268,14 +1233,31 @@ QGroupBox::title {{
     color: {_THEME_FG};
     background-color: {_THEME_BG};
 }}
-QLineEdit, QPlainTextEdit, QTreeWidget, QTableWidget {{
+QLineEdit, QPlainTextEdit, QTreeWidget {{
     background-color: {_THEME_INPUT_BG};
     color: {_THEME_INPUT_FG};
     border: 1px solid {_THEME_BORDER};
     border-radius: 4px;
 }}
-QTableWidget {{
-    gridline-color: #b8bec7;
+/* Checkbox indicators are drawn explicitly with plain colors rather
+   than left to Qt's native theme rendering: without this, the
+   indicator's checkmark glyph and box come from the OS's native
+   widget style, which can render with poor (sometimes invisible)
+   contrast against custom QSS colors depending on the user's Windows
+   light/dark theme -- explicit colors here make visibility consistent
+   regardless of the host OS theme. */
+QTreeWidget::indicator, QCheckBox::indicator {{
+    width: 14px;
+    height: 14px;
+    border: 1px solid {_THEME_BORDER};
+    border-radius: 2px;
+    background-color: {_THEME_INPUT_BG};
+}}
+QTreeWidget::indicator:checked, QCheckBox::indicator:checked {{
+    background-color: {_THEME_ACCENT};
+}}
+QTreeWidget::indicator:indeterminate, QCheckBox::indicator:indeterminate {{
+    background-color: {_THEME_ACCENT_HOVER};
 }}
 QPushButton {{
     padding: 6px 14px;
@@ -1756,7 +1738,7 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         self._corroboration_tree = QTreeWidget()
         self._corroboration_tree.setHeaderLabels(["Application", "Score"])
         self._corroboration_tree.setMaximumHeight(180)
-        # Reuses the same delegate instance as the rule-findings table's
+        # Reuses the same delegate instance as the rule-findings tree's
         # Score column below: it already falls back to plain-text
         # rendering for non-numeric cell text (see _ScoreBarDelegate.paint),
         # so it renders a bar for the numeric app-level score rows and
@@ -1770,27 +1752,27 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         layout.addWidget(group)
 
     def _build_rule_findings_panel(self, layout: QVBoxLayout) -> None:
-        """Build the rule-based findings table.
+        """Build the rule-based findings tree.
 
         Surfaces detections that aren't inherently about one specific
         application -- filename/hash mismatches, EVTX record-number
         gaps, timestomping -- alongside the program-execution/
-        persistence rules that are.
+        persistence rules that are. Grouped by rule category (top-level
+        rows) with each individual finding as a child, matching the
+        Validation Rules tree's category-then-item structure for
+        visual and structural consistency across the redesigned GUI.
         """
         group = QGroupBox("Rule-Based Findings")
         group_layout = QVBoxLayout(group)
 
-        self._results_table = QTableWidget(0, 4)
-        self._results_table.setHorizontalHeaderLabels(["Severity", "Score", "Rule", "Description"])
-        self._results_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self._results_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self._results_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self._results_table.setSortingEnabled(True)
-        self._results_table.horizontalHeader().setStretchLastSection(True)
-        self._results_table.setColumnWidth(1, 140)
-        self._results_table.setItemDelegateForColumn(1, self._score_delegate)
-        self._results_table.itemSelectionChanged.connect(self._on_finding_selected)
-        group_layout.addWidget(self._results_table)
+        self._findings_tree = QTreeWidget()
+        self._findings_tree.setHeaderLabels(["Severity", "Score", "Rule", "Description"])
+        self._findings_tree.setColumnWidth(1, 140)
+        self._findings_tree.setColumnWidth(2, 220)
+        self._findings_tree.header().setStretchLastSection(True)
+        self._findings_tree.setItemDelegateForColumn(1, self._score_delegate)
+        self._findings_tree.itemSelectionChanged.connect(self._on_finding_selected)
+        group_layout.addWidget(self._findings_tree)
 
         layout.addWidget(group)
 
@@ -2044,7 +2026,7 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
 
     def _clear_results(self) -> None:
         """Clear both results views and the detail pane."""
-        self._results_table.setRowCount(0)
+        self._findings_tree.clear()
         self._corroboration_tree.clear()
         self._set_detail_text("")
 
@@ -2090,35 +2072,50 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         self._set_detail_text(detail)
 
     def _populate_results(self, findings: list[CorrelationFinding]) -> None:
-        """Populate the findings table.
+        """Populate the rule-based findings tree, grouped by rule category.
 
         Args:
-            findings: The findings to display, in display order.
+            findings: The findings to display, already in display
+                order (severity/score descending; see
+                :meth:`_handle_analysis_result`).
         """
-        self._results_table.setSortingEnabled(False)
-        self._results_table.setRowCount(len(findings))
+        self._findings_tree.clear()
+        findings_by_category: dict[str, list[tuple[int, CorrelationFinding]]] = {}
         for index, finding in enumerate(findings):
-            severity_item = _SortableItem(
-                finding.severity.value.upper(), list(Severity).index(finding.severity)
+            rule_cls = RULE_REGISTRY.get(finding.rule_name)
+            category = rule_cls.category if rule_cls is not None else "other"
+            findings_by_category.setdefault(category, []).append((index, finding))
+
+        for category in sorted(findings_by_category):
+            category_findings = findings_by_category[category]
+            category_item = QTreeWidgetItem(
+                self._findings_tree,
+                ["", "", _rule_category_label(category), f"{len(category_findings)} finding(s)"],
             )
-            severity_item.setForeground(QColor(_SEVERITY_COLORS[finding.severity]))
-            severity_item.setData(Qt.UserRole, index)
-            score_item = _SortableItem(str(finding.score), finding.score)
-            self._results_table.setItem(index, 0, severity_item)
-            self._results_table.setItem(index, 1, score_item)
-            self._results_table.setItem(index, 2, QTableWidgetItem(finding.rule_name))
-            self._results_table.setItem(index, 3, QTableWidgetItem(finding.description))
-        self._results_table.setSortingEnabled(True)
+            for index, finding in category_findings:
+                child = QTreeWidgetItem(
+                    category_item,
+                    [
+                        finding.severity.value.upper(),
+                        str(finding.score),
+                        finding.rule_name,
+                        finding.description,
+                    ],
+                )
+                child.setForeground(0, QColor(_SEVERITY_COLORS[finding.severity]))
+                child.setData(0, Qt.UserRole, index)
+            category_item.setExpanded(True)
 
     def _on_finding_selected(self) -> None:
         """Show full detail for the selected finding in the detail pane."""
-        row = self._results_table.currentRow()
-        if row < 0:
+        items = self._findings_tree.selectedItems()
+        if not items:
             return
-        severity_item = self._results_table.item(row, 0)
-        if severity_item is None:
+        index = items[0].data(0, Qt.UserRole)
+        if index is None:
+            # A category header row (no finding of its own) was selected.
             return
-        finding = self._last_findings[severity_item.data(Qt.UserRole)]
+        finding = self._last_findings[index]
         detail = (
             f"Rule: {finding.rule_name}\n"
             f"Severity: {finding.severity.value.upper()}\n"
@@ -2173,9 +2170,9 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
     def _open_report(self) -> None:
         """Open the most recently saved report in the default browser.
 
-        Mirrors DLEAPP's post-processing "Open HTML in Browser"
-        action, but -- unlike DLEAPP -- doesn't close the application
-        afterward, so findings stay browsable in the results table.
+        Unlike some other forensic triage tools' equivalent action,
+        this does not close the application afterward, so findings
+        stay browsable in the results views.
         """
         if self._last_report_path is not None:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._last_report_path)))
@@ -2227,6 +2224,13 @@ def main() -> None:
     """Launch the Corrobora GUI application."""
     _configure_logging()
     app = QApplication(sys.argv)
+    # Windows' native style ("windowsvista") only partially honors custom
+    # QSS for certain native-drawn controls -- checkbox indicators in
+    # particular can silently ignore ::indicator color rules and fall
+    # back to native (theme-dependent, sometimes low-contrast) rendering.
+    # Fusion is Qt's cross-platform style and fully respects stylesheet
+    # sub-control rules, so _STYLESHEET's checkbox colors actually apply.
+    app.setStyle("Fusion")
     window = CorroboraMainWindow()
     window.show()
     sys.exit(app.exec_())
