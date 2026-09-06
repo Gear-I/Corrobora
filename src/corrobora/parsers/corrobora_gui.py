@@ -32,12 +32,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from PyQt5.QtCore import QModelIndex, QObject, QRect, Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap
+from PyQt5.QtCore import QModelIndex, QObject, QRect, Qt, QThread, QUrl, pyqtSignal
+from PyQt5.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import (
-    QAbstractItemView,
     QApplication,
-    QCheckBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -51,8 +49,8 @@ from PyQt5.QtWidgets import (
     QScrollArea,
     QStyledItemDelegate,
     QStyleOptionViewItem,
-    QTableWidget,
-    QTableWidgetItem,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -76,6 +74,11 @@ from .correlation_engine import (  # pylint: disable=wrong-import-position
     CorrelationFinding,
     Severity,
     build_context,
+)
+from ..rules.app_corroboration import (  # pylint: disable=wrong-import-position
+    DISCLAIMER,
+    AppCorroboration,
+    build_app_corroboration,
 )
 from ..rules.base import CorrelationRule  # pylint: disable=wrong-import-position
 from ..rules.rule_registry import RULE_REGISTRY  # pylint: disable=wrong-import-position
@@ -125,6 +128,33 @@ def _rule_category_label(category: str) -> str:
         the raw category name if none is configured.
     """
     return _RULE_CATEGORY_LABELS.get(category, category.replace("_", " ").title())
+
+
+# Display labels for individual rules, shown as the checkable leaf nodes
+# under each category in the Validation Rules tree. A rule not listed
+# here still gets a leaf node -- _rule_display_name() falls back to a
+# title-cased version of the raw rule name, so a new rule appears
+# automatically without a code change.
+_RULE_DISPLAY_NAMES: dict[str, str] = {
+    "prefetch_execution_without_evtx": "Prefetch Execution Without EVTX",
+    "persistence_without_execution": "Persistence Without Execution",
+    "prefetch_filename_hash_mismatch": "Prefetch Filename Hash Mismatch",
+    "evtx_record_number_gap": "EVTX Record Number Gap",
+    "mft_timestomping_detected": "MFT Timestomping Detected",
+}
+
+
+def _rule_display_name(rule_name: str) -> str:
+    """Return the display label for an individual rule.
+
+    Args:
+        rule_name: A :attr:`CorrelationRule.rule_name` value.
+
+    Returns:
+        The configured label, or a title-cased fallback derived from
+        the raw rule name if none is configured.
+    """
+    return _RULE_DISPLAY_NAMES.get(rule_name, rule_name.replace("_", " ").title())
 
 
 # --------------------------------------------------------------------------
@@ -723,12 +753,15 @@ class AnalysisOutcome:
             succeeded.
         context: The parsed artifact context the findings were
             generated from, if the run succeeded.
+        app_corroboration: Per-application cross-artifact
+            corroboration summaries, if the run succeeded.
         error: A description of what went wrong, if the run failed.
             ``None`` on success.
     """
 
     findings: tuple[CorrelationFinding, ...]
     context: CorrelationContext | None
+    app_corroboration: tuple[AppCorroboration, ...]
     error: str | None
 
 
@@ -768,14 +801,17 @@ def run_analysis(
         )
         engine = CorrelationEngine(rules=rules)
         findings = tuple(engine.run(context))
+        app_corroboration = tuple(build_app_corroboration(context))
     except Exception as exc:  # pylint: disable=broad-exception-caught
         # Deliberately broad: this is the top-level boundary between the
         # background worker thread and the GUI; any failure here must be
         # reported to the user rather than silently killing the thread.
         logger.exception("Analysis failed")
-        return AnalysisOutcome(findings=(), context=None, error=str(exc))
+        return AnalysisOutcome(findings=(), context=None, app_corroboration=(), error=str(exc))
 
-    return AnalysisOutcome(findings=findings, context=context, error=None)
+    return AnalysisOutcome(
+        findings=findings, context=context, app_corroboration=app_corroboration, error=None
+    )
 
 
 def findings_to_html(findings: list[CorrelationFinding], title: str = "Corrobora Findings") -> str:
@@ -1073,37 +1109,6 @@ class AnalysisWorker(QObject):  # pylint: disable=too-few-public-methods
         self.finished.emit(run_analysis(*self._args))
 
 
-class _SortableItem(QTableWidgetItem):  # pylint: disable=too-few-public-methods
-    """A table item that sorts by a stored numeric key, not its displayed text.
-
-    ``QTableWidgetItem``'s default sort compares displayed text, which
-    would sort severities alphabetically ("HIGH" before "LOW") and
-    scores lexicographically ("9" after "10") instead of by their real
-    ordering.
-
-    Note:
-        ``too-few-public-methods`` is intentionally suppressed: this
-        class only needs to override ``__lt__`` (a dunder method, not
-        counted as "public" by this check) to change sort behavior --
-        it isn't missing an API, it has exactly the one it needs.
-    """
-
-    def __init__(self, text: str, sort_key: float) -> None:
-        """Initialize the item.
-
-        Args:
-            text: The text to display.
-            sort_key: The numeric value to sort by instead of ``text``.
-        """
-        super().__init__(text)
-        self._sort_key = sort_key
-
-    def __lt__(self, other: object) -> bool:
-        if isinstance(other, _SortableItem):
-            return self._sort_key < other._sort_key
-        return super().__lt__(other)
-
-
 # Corroboration-score fill colors, bucketed by strength. Deliberately the
 # same palette as _SEVERITY_COLORS for visual consistency, but keyed by
 # score magnitude rather than the Severity enum -- score and severity are
@@ -1133,13 +1138,14 @@ def _score_bar_color(score: int) -> QColor:
 
 
 class _ScoreBarDelegate(QStyledItemDelegate):
-    """Paints a table cell as a filled bar followed by a percentage label.
+    """Paints a tree/table cell as a filled bar followed by a percentage label.
 
-    Renders each finding's corroboration score visually (e.g. a mostly
-    filled bar for a strong score) rather than as a bare number, while
-    leaving the underlying :class:`_SortableItem` untouched -- sorting
-    still works exactly as before, since this only changes how the
-    existing item is painted, not what data or sort key it holds.
+    Renders a corroboration score visually (e.g. a mostly filled bar
+    for a strong score) rather than as a bare number. Falls back to
+    plain-text rendering for any cell whose text isn't a bare integer
+    (see :meth:`paint`), so it's safe to reuse across every column
+    it's attached to -- including tree columns that mix numeric score
+    rows with non-numeric "Found"/"Not Found" rows.
     """
 
     _BAR_HEIGHT = 14
@@ -1194,62 +1200,110 @@ class _ScoreBarDelegate(QStyledItemDelegate):
 # Styling
 # --------------------------------------------------------------------------
 
-_STYLESHEET = """
-QMainWindow {
-    background-color: #f5f6f8;
-}
-QGroupBox {
+# A plum/aubergine base, grey input surfaces, a blue accent for actions,
+# and cream text -- a distinctive palette for Corrobora's identity.
+_THEME_BG = "#5F3A5C"
+_THEME_PANEL = "#6E4569"
+_THEME_BORDER = "#402A3E"
+_THEME_INPUT_BG = "#D5D9DE"
+_THEME_INPUT_FG = "#1A1A1A"
+_THEME_ACCENT = "#70ADEB"
+_THEME_ACCENT_HOVER = "#5F95D1"
+_THEME_FG = "#F7F0E0"
+
+_STYLESHEET = f"""
+QMainWindow {{
+    background-color: {_THEME_BG};
+}}
+QWidget {{
+    color: {_THEME_FG};
+}}
+QGroupBox {{
     font-weight: bold;
-    border: 1px solid #c7cdd6;
+    border: 1px solid {_THEME_BORDER};
     border-radius: 6px;
     margin-top: 10px;
     padding-top: 10px;
-    background-color: #ffffff;
-}
-QGroupBox::title {
+    background-color: {_THEME_PANEL};
+}}
+QGroupBox::title {{
     subcontrol-origin: margin;
     left: 10px;
     padding: 0 4px;
-    color: #2d2d2d;
-}
-QPushButton {
-    padding: 6px 14px;
-    border: 1px solid #b0b6bf;
+    color: {_THEME_FG};
+    background-color: {_THEME_BG};
+}}
+QLineEdit, QPlainTextEdit, QTreeWidget {{
+    background-color: {_THEME_INPUT_BG};
+    color: {_THEME_INPUT_FG};
+    border: 1px solid {_THEME_BORDER};
     border-radius: 4px;
-    background-color: #ffffff;
-}
-QPushButton:hover {
-    background-color: #eef2f7;
-}
-QPushButton:disabled {
-    color: #9aa0a6;
-}
-QPushButton#runButton {
-    background-color: #2d6cdf;
-    color: #ffffff;
+}}
+/* Checkbox indicators are drawn explicitly with plain colors rather
+   than left to Qt's native theme rendering: without this, the
+   indicator's checkmark glyph and box come from the OS's native
+   widget style, which can render with poor (sometimes invisible)
+   contrast against custom QSS colors depending on the user's Windows
+   light/dark theme -- explicit colors here make visibility consistent
+   regardless of the host OS theme. */
+QTreeWidget::indicator, QCheckBox::indicator {{
+    width: 14px;
+    height: 14px;
+    border: 1px solid {_THEME_BORDER};
+    border-radius: 2px;
+    background-color: {_THEME_INPUT_BG};
+}}
+QTreeWidget::indicator:checked, QCheckBox::indicator:checked {{
+    background-color: {_THEME_ACCENT};
+}}
+QTreeWidget::indicator:indeterminate, QCheckBox::indicator:indeterminate {{
+    background-color: {_THEME_ACCENT_HOVER};
+}}
+QPushButton {{
+    padding: 6px 14px;
+    border: 1px solid {_THEME_BORDER};
+    border-radius: 4px;
+    background-color: {_THEME_ACCENT};
+    color: {_THEME_INPUT_FG};
+}}
+QPushButton:hover {{
+    background-color: {_THEME_ACCENT_HOVER};
+}}
+QPushButton:disabled {{
+    background-color: #9aa0a6;
+    color: #e2e2e2;
+}}
+QPushButton#runButton {{
+    background-color: {_THEME_ACCENT};
+    color: {_THEME_INPUT_FG};
     font-weight: bold;
     font-size: 11pt;
     padding: 10px 24px;
     border: none;
-}
-QPushButton#runButton:hover {
-    background-color: #245bc0;
-}
-QPushButton#runButton:disabled {
+}}
+QPushButton#runButton:hover {{
+    background-color: {_THEME_ACCENT_HOVER};
+}}
+QPushButton#runButton:disabled {{
     background-color: #9fb7e8;
     color: #eef2f7;
-}
-QTableWidget {
-    border: 1px solid #c7cdd6;
-    background-color: #ffffff;
-    gridline-color: #e5e8ec;
-}
-QHeaderView::section {
-    background-color: #2d2d2d;
-    color: #ffffff;
+}}
+QHeaderView::section {{
+    background-color: {_THEME_BORDER};
+    color: {_THEME_FG};
     padding: 4px;
     border: none;
-}
+}}
+QProgressBar {{
+    border: 1px solid {_THEME_BORDER};
+    border-radius: 4px;
+    background-color: {_THEME_INPUT_BG};
+    color: {_THEME_INPUT_FG};
+    text-align: center;
+}}
+QProgressBar::chunk {{
+    background-color: {_THEME_ACCENT};
+}}
 """
 
 
@@ -1291,9 +1345,11 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
 
         self._discovered: DiscoveredArtifacts | None = None
         self._last_findings: list[CorrelationFinding] = []
+        self._last_app_corroboration: list[AppCorroboration] = []
+        self._last_report_path: Path | None = None
         self._analysis_running = False
-        self._category_checkboxes: dict[str, QCheckBox] = {}
-        self._rule_category_checkboxes: dict[str, QCheckBox] = {}
+        self._artifact_items: dict[str, QTreeWidgetItem] = {}
+        self._rule_items: dict[str, QTreeWidgetItem] = {}
         self._worker: AnalysisWorker | None = None
         self._thread: QThread | None = None
         self._log_handler: QtLogHandler | None = None
@@ -1311,7 +1367,9 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         self._build_artifact_categories_section(layout)
         self._build_validation_rules_section(layout)
         self._build_run_controls(layout)
-        self._build_results_panel(layout)
+        self._build_app_corroboration_panel(layout)
+        self._build_rule_findings_panel(layout)
+        self._build_finding_detail_panel(layout)
         self._build_log_panel(layout)
         layout.addStretch(1)
 
@@ -1413,7 +1471,7 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         layout.addWidget(group)
 
     def _build_artifact_categories_section(self, layout: QVBoxLayout) -> None:
-        """Build the "Artifact Categories" checkbox list.
+        """Build the "Artifact Categories" checklist as a filterable, checkable tree.
 
         Only the artifact types Corrobora actually parses today are
         listed (see :data:`_ARTIFACT_CATEGORIES`) -- no placeholders
@@ -1421,31 +1479,209 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         """
         group = QGroupBox("Artifact Categories")
         group_layout = QVBoxLayout(group)
+
+        self._artifact_tree = QTreeWidget()
+        self._configure_selection_tree(self._artifact_tree, max_height=130)
         for field, label in _ARTIFACT_CATEGORIES:
-            checkbox = QCheckBox(label)
-            checkbox.setChecked(True)
-            self._category_checkboxes[field] = checkbox
-            group_layout.addWidget(checkbox)
+            item = QTreeWidgetItem(self._artifact_tree, [label])
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(0, Qt.Checked)
+            self._artifact_items[field] = item
+
+        group_layout.addWidget(
+            self._build_tree_controls(self._artifact_tree, "Filter artifact categories...")
+        )
+        group_layout.addWidget(self._artifact_tree)
         layout.addWidget(group)
 
     def _build_validation_rules_section(self, layout: QVBoxLayout) -> None:
-        """Build the "Validation Rules" checkbox list.
+        """Build the "Validation Rules" checklist as a filterable, checkable tree.
 
-        One checkbox per actual rule category in
-        :data:`~corrobora.rules.rule_registry.RULE_REGISTRY` (today:
-        Program Execution, Persistence, Integrity) -- not an
-        illustrative list, so a new rule category appears here
+        Two levels: a checkable category node (tri-state -- reflects
+        whether all, some, or none of its rules are checked) with
+        each of that category's individual rules as checkable
+        children, built from
+        :data:`~corrobora.rules.rule_registry.RULE_REGISTRY` -- not an
+        illustrative list, so a new rule or category appears here
         automatically without a code change.
         """
         group = QGroupBox("Validation Rules")
         group_layout = QVBoxLayout(group)
-        categories = sorted({cls.category for cls in RULE_REGISTRY.values()})
-        for category in categories:
-            checkbox = QCheckBox(_rule_category_label(category))
-            checkbox.setChecked(True)
-            self._rule_category_checkboxes[category] = checkbox
-            group_layout.addWidget(checkbox)
+
+        self._rules_tree = QTreeWidget()
+        self._configure_selection_tree(self._rules_tree, max_height=180)
+
+        rule_names_by_category: dict[str, list[str]] = {}
+        for rule_name, rule_cls in RULE_REGISTRY.items():
+            rule_names_by_category.setdefault(rule_cls.category, []).append(rule_name)
+
+        for category in sorted(rule_names_by_category):
+            # Deliberately *not* Qt.ItemIsAutoTristate: that flag makes Qt
+            # compute this item's tri-state automatically from its children,
+            # which fought with -- and silently overrode -- the manual
+            # cascade in _on_rules_tree_item_changed below. Plain
+            # ItemIsUserCheckable plus setCheckState(PartiallyChecked)
+            # displays and persists the partial state fine on its own.
+            category_item = QTreeWidgetItem(self._rules_tree, [_rule_category_label(category)])
+            category_item.setFlags(category_item.flags() | Qt.ItemIsUserCheckable)
+            category_item.setCheckState(0, Qt.Checked)
+            for rule_name in sorted(rule_names_by_category[category]):
+                rule_item = QTreeWidgetItem(category_item, [_rule_display_name(rule_name)])
+                rule_item.setFlags(rule_item.flags() | Qt.ItemIsUserCheckable)
+                rule_item.setCheckState(0, Qt.Checked)
+                self._rule_items[rule_name] = rule_item
+            category_item.setExpanded(True)
+
+        self._rules_tree.itemChanged.connect(self._on_rules_tree_item_changed)
+
+        group_layout.addWidget(
+            self._build_tree_controls(self._rules_tree, "Filter validation rules...")
+        )
+        group_layout.addWidget(self._rules_tree)
         layout.addWidget(group)
+
+    @staticmethod
+    def _configure_selection_tree(tree: QTreeWidget, max_height: int) -> None:
+        """Apply shared configuration for a filterable, checkable selection tree.
+
+        Args:
+            tree: The tree to configure.
+            max_height: Fixed maximum display height; content beyond
+                this scrolls internally rather than growing the
+                surrounding layout unbounded.
+        """
+        tree.setHeaderHidden(True)
+        tree.setMaximumHeight(max_height)
+
+    def _build_tree_controls(self, tree: QTreeWidget, placeholder: str) -> QWidget:
+        """Build a filter box + Select All/Deselect All row for a checkable tree.
+
+        Args:
+            tree: The tree these controls operate on.
+            placeholder: Placeholder text for the filter field.
+
+        Returns:
+            The container widget to place above ``tree``.
+        """
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+
+        filter_edit = QLineEdit()
+        filter_edit.setPlaceholderText(placeholder)
+        filter_edit.textChanged.connect(lambda text: self._filter_tree(tree, text))
+        row_layout.addWidget(filter_edit, stretch=1)
+
+        select_all_button = QPushButton("Select All")
+        select_all_button.clicked.connect(lambda: self._set_all_checked(tree, True))
+        row_layout.addWidget(select_all_button)
+
+        deselect_all_button = QPushButton("Deselect All")
+        deselect_all_button.clicked.connect(lambda: self._set_all_checked(tree, False))
+        row_layout.addWidget(deselect_all_button)
+
+        return row
+
+    @staticmethod
+    def _filter_tree(tree: QTreeWidget, text: str) -> None:
+        """Show only items matching ``text`` (plus their ancestors/descendants).
+
+        Args:
+            tree: The tree to filter.
+            text: The filter text; empty shows everything.
+        """
+        query = text.strip().lower()
+        for i in range(tree.topLevelItemCount()):
+            CorroboraMainWindow._filter_tree_item(tree.topLevelItem(i), query)
+
+    @staticmethod
+    def _filter_tree_item(item: QTreeWidgetItem, query: str) -> bool:
+        """Recursively apply a filter to one item and its descendants.
+
+        Args:
+            item: The item to filter.
+            query: The lowercased filter text; empty matches everything.
+
+        Returns:
+            ``True`` if this item or any descendant matched (and is
+            therefore left visible).
+        """
+        self_match = not query or query in item.text(0).lower()
+        child_match = False
+        for i in range(item.childCount()):
+            if CorroboraMainWindow._filter_tree_item(item.child(i), query):
+                child_match = True
+        visible = self_match or child_match
+        item.setHidden(not visible)
+        return visible
+
+    @staticmethod
+    def _set_all_checked(tree: QTreeWidget, checked: bool) -> None:
+        """Check or uncheck every item in a tree, including nested children.
+
+        Args:
+            tree: The tree to update.
+            checked: ``True`` to check every item, ``False`` to uncheck.
+        """
+        state = Qt.Checked if checked else Qt.Unchecked
+        tree.blockSignals(True)
+        try:
+            for i in range(tree.topLevelItemCount()):
+                CorroboraMainWindow._set_item_checked_recursive(tree.topLevelItem(i), state)
+        finally:
+            tree.blockSignals(False)
+
+    @staticmethod
+    def _set_item_checked_recursive(item: QTreeWidgetItem, state: Qt.CheckState) -> None:
+        """Set an item's check state and cascade it to every descendant.
+
+        Args:
+            item: The item to update.
+            state: The check state to apply.
+        """
+        item.setCheckState(0, state)
+        for i in range(item.childCount()):
+            CorroboraMainWindow._set_item_checked_recursive(item.child(i), state)
+
+    def _on_rules_tree_item_changed(self, item: QTreeWidgetItem, _column: int) -> None:
+        """Cascade a Validation Rules tree checkbox change between parent and children.
+
+        Checking/unchecking a category cascades to all its rules;
+        checking/unchecking an individual rule recomputes its
+        category's tri-state (all/some/none checked).
+
+        Args:
+            item: The item whose check state changed.
+            _column: The column that changed (always 0 here; unused).
+        """
+        self._rules_tree.blockSignals(True)
+        try:
+            if item.childCount() > 0:
+                state = item.checkState(0)
+                if state != Qt.PartiallyChecked:
+                    for i in range(item.childCount()):
+                        item.child(i).setCheckState(0, state)
+            else:
+                parent = item.parent()
+                if parent is not None:
+                    self._refresh_parent_check_state(parent)
+        finally:
+            self._rules_tree.blockSignals(False)
+
+    @staticmethod
+    def _refresh_parent_check_state(parent: QTreeWidgetItem) -> None:
+        """Recompute a parent item's tri-state from its children's check states.
+
+        Args:
+            parent: The parent item to update.
+        """
+        states = {parent.child(i).checkState(0) for i in range(parent.childCount())}
+        if states == {Qt.Checked}:
+            parent.setCheckState(0, Qt.Checked)
+        elif states == {Qt.Unchecked}:
+            parent.setCheckState(0, Qt.Unchecked)
+        else:
+            parent.setCheckState(0, Qt.PartiallyChecked)
 
     def _build_run_controls(self, layout: QVBoxLayout) -> None:
         """Build the run/export/sample-data control bar and progress indicator."""
@@ -1463,6 +1699,16 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         self._export_button.setEnabled(False)
         control_layout.addWidget(self._export_button)
 
+        self._open_report_button = QPushButton("Open Report in Browser")
+        self._open_report_button.clicked.connect(self._open_report)
+        self._open_report_button.setEnabled(False)
+        control_layout.addWidget(self._open_report_button)
+
+        self._open_output_folder_button = QPushButton("Open Output Folder")
+        self._open_output_folder_button.clicked.connect(self._open_output_folder)
+        self._open_output_folder_button.setEnabled(False)
+        control_layout.addWidget(self._open_output_folder_button)
+
         sample_button = QPushButton("Generate Sample $MFT Data...")
         sample_button.clicked.connect(self._generate_sample_mft)
         control_layout.addWidget(sample_button)
@@ -1478,30 +1724,68 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
 
         layout.addWidget(control_bar)
 
-    def _build_results_panel(self, layout: QVBoxLayout) -> None:
-        """Build the findings table and its detail pane."""
-        group = QGroupBox("Findings")
+    def _build_app_corroboration_panel(self, layout: QVBoxLayout) -> None:
+        """Build the per-application corroboration tree.
+
+        Read-only results, not a selection tree: top-level rows are
+        one per detected application (name, corroboration score);
+        children are one per artifact type, showing whether that type
+        corroborates the application's presence.
+        """
+        group = QGroupBox("Application Corroboration")
         group_layout = QVBoxLayout(group)
 
-        self._results_table = QTableWidget(0, 4)
-        self._results_table.setHorizontalHeaderLabels(["Severity", "Score", "Rule", "Description"])
-        self._results_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self._results_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self._results_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self._results_table.setSortingEnabled(True)
-        self._results_table.horizontalHeader().setStretchLastSection(True)
-        self._results_table.setColumnWidth(1, 140)
-        # Kept as an instance attribute, not a local: PyQt5 doesn't keep its
-        # own strong reference to a delegate, so without this it would be
-        # garbage-collected and the column would silently fall back to
-        # plain-text rendering.
-        self._score_delegate = _ScoreBarDelegate(self._results_table)
-        self._results_table.setItemDelegateForColumn(1, self._score_delegate)
-        self._results_table.itemSelectionChanged.connect(self._on_finding_selected)
-        group_layout.addWidget(self._results_table)
+        self._corroboration_tree = QTreeWidget()
+        self._corroboration_tree.setHeaderLabels(["Application", "Score"])
+        self._corroboration_tree.setMaximumHeight(180)
+        # Reuses the same delegate instance as the rule-findings tree's
+        # Score column below: it already falls back to plain-text
+        # rendering for non-numeric cell text (see _ScoreBarDelegate.paint),
+        # so it renders a bar for the numeric app-level score rows and
+        # plain "Found"/"Not Found" text for the child rows safely.
+        self._score_delegate = _ScoreBarDelegate(self._corroboration_tree)
+        self._corroboration_tree.setItemDelegateForColumn(1, self._score_delegate)
+        self._corroboration_tree.itemSelectionChanged.connect(
+            self._on_app_corroboration_selected
+        )
+        group_layout.addWidget(self._corroboration_tree)
+        layout.addWidget(group)
+
+    def _build_rule_findings_panel(self, layout: QVBoxLayout) -> None:
+        """Build the rule-based findings tree.
+
+        Surfaces detections that aren't inherently about one specific
+        application -- filename/hash mismatches, EVTX record-number
+        gaps, timestomping -- alongside the program-execution/
+        persistence rules that are. Grouped by rule category (top-level
+        rows) with each individual finding as a child, matching the
+        Validation Rules tree's category-then-item structure for
+        visual and structural consistency across the redesigned GUI.
+        """
+        group = QGroupBox("Rule-Based Findings")
+        group_layout = QVBoxLayout(group)
+
+        self._findings_tree = QTreeWidget()
+        self._findings_tree.setHeaderLabels(["Severity", "Score", "Rule", "Description"])
+        self._findings_tree.setColumnWidth(1, 140)
+        self._findings_tree.setColumnWidth(2, 220)
+        self._findings_tree.header().setStretchLastSection(True)
+        self._findings_tree.setItemDelegateForColumn(1, self._score_delegate)
+        self._findings_tree.itemSelectionChanged.connect(self._on_finding_selected)
+        group_layout.addWidget(self._findings_tree)
 
         layout.addWidget(group)
 
+    def _build_finding_detail_panel(self, layout: QVBoxLayout) -> None:
+        """Build the detail pane shared by both results views above.
+
+        "Application Corroboration" and "Rule-Based Findings" answer
+        different questions -- the former "how many independent
+        artifacts corroborate this program's presence," the latter
+        "what specific rule-based anomaly was detected" -- so they're
+        kept as separate views rather than forced into one shape, but
+        both drive this same detail pane.
+        """
         detail_group = QGroupBox("Finding Detail")
         detail_layout = QVBoxLayout(detail_group)
         self._detail_text = QPlainTextEdit()
@@ -1586,16 +1870,17 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
             )
 
     def _update_category_labels(self) -> None:
-        """Refresh each artifact-category checkbox's label with its discovered count."""
+        """Refresh each artifact-category tree item's label with its discovered count."""
         for field, label in _ARTIFACT_CATEGORIES:
             count = len(getattr(self._discovered, field)) if self._discovered else 0
-            self._category_checkboxes[field].setText(f"{label} — {count} found")
+            self._artifact_items[field].setText(0, f"{label} — {count} found")
 
     def _browse_output_dir(self) -> None:
         """Prompt for an output directory for auto-saved reports."""
         folder = QFileDialog.getExistingDirectory(self, "Select output directory")
         if folder:
             self._output_dir_edit.setText(folder)
+            self._open_output_folder_button.setEnabled(True)
 
     # -- checkbox-driven filtering ---------------------------------------------
 
@@ -1607,20 +1892,21 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         Returns:
             A ``(evtx_paths, registry_paths, prefetch_paths,
             mft_paths)`` tuple, in the same order as
-            :data:`_ARTIFACT_CATEGORIES`. Any category whose checkbox
+            :data:`_ARTIFACT_CATEGORIES`. Any category whose tree item
             is unchecked -- or before any evidence source has been
             scanned -- contributes an empty list.
         """
         filtered: list[list[str]] = []
         for field, _label in _ARTIFACT_CATEGORIES:
-            if self._discovered is not None and self._category_checkboxes[field].isChecked():
+            is_checked = self._artifact_items[field].checkState(0) == Qt.Checked
+            if self._discovered is not None and is_checked:
                 filtered.append(list(getattr(self._discovered, field)))
             else:
                 filtered.append([])
         return filtered[0], filtered[1], filtered[2], filtered[3]
 
     def _selected_rules(self) -> list[CorrelationRule]:
-        """Return one instance of every rule whose category checkbox is checked.
+        """Return one instance of every individually checked rule.
 
         Returns:
             Freshly instantiated rules from
@@ -1628,8 +1914,8 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         """
         return [
             rule_cls()
-            for rule_cls in RULE_REGISTRY.values()
-            if self._rule_category_checkboxes[rule_cls.category].isChecked()
+            for rule_name, rule_cls in RULE_REGISTRY.items()
+            if self._rule_items[rule_name].checkState(0) == Qt.Checked
         ]
 
     # -- analysis lifecycle ---------------------------------------------------
@@ -1697,7 +1983,14 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         )
         self._last_findings = all_findings
 
+        # Worst-corroborated applications (most forensically interesting)
+        # surface first, mirroring the severity-descending sort above.
+        self._last_app_corroboration = sorted(
+            outcome.app_corroboration, key=lambda a: a.score
+        )
+
         self._populate_results(all_findings)
+        self._populate_app_corroboration(self._last_app_corroboration)
         self._export_button.setEnabled(bool(all_findings))
         self._status_label.setText(f"Done. {len(all_findings)} finding(s).")
         self._auto_export(all_findings)
@@ -1726,44 +2019,103 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
             logger.error("Auto-export to %s failed: %s", target, exc)
             return
         logger.info("Report saved to %s", target)
+        self._last_report_path = target
+        self._open_report_button.setEnabled(True)
 
     # -- results display --------------------------------------------------
 
     def _clear_results(self) -> None:
-        """Clear the findings table and detail pane."""
-        self._results_table.setRowCount(0)
+        """Clear both results views and the detail pane."""
+        self._findings_tree.clear()
+        self._corroboration_tree.clear()
         self._set_detail_text("")
 
-    def _populate_results(self, findings: list[CorrelationFinding]) -> None:
-        """Populate the findings table.
+    def _populate_app_corroboration(self, app_corroboration: list[AppCorroboration]) -> None:
+        """Populate the Application Corroboration tree.
 
         Args:
-            findings: The findings to display, in display order.
+            app_corroboration: The corroboration summaries to display,
+                already in display order (see :meth:`_handle_analysis_result`).
         """
-        self._results_table.setSortingEnabled(False)
-        self._results_table.setRowCount(len(findings))
-        for index, finding in enumerate(findings):
-            severity_item = _SortableItem(
-                finding.severity.value.upper(), list(Severity).index(finding.severity)
+        self._corroboration_tree.clear()
+        for index, app in enumerate(app_corroboration):
+            top_item = QTreeWidgetItem(self._corroboration_tree, [app.application, str(app.score)])
+            top_item.setData(0, Qt.UserRole, index)
+            for presence in app.presence:
+                status = "✓ Found" if presence.found else "✗ Not Found"
+                child = QTreeWidgetItem(top_item, [presence.artifact_type, status])
+                child.setForeground(1, QColor("#2e7d32" if presence.found else "#c0392b"))
+            top_item.setExpanded(True)
+
+    def _on_app_corroboration_selected(self) -> None:
+        """Show the selected application's full corroboration detail."""
+        items = self._corroboration_tree.selectedItems()
+        if not items:
+            return
+        item = items[0]
+        top_item = item if item.parent() is None else item.parent()
+        index = top_item.data(0, Qt.UserRole)
+        if index is None:
+            return
+        app = self._last_app_corroboration[index]
+        detail = (
+            f"Application: {app.application}\n"
+            f"Corroboration score: {app.score}/100\n\n"
+            f"{app.assessment}\n\n"
+            + "\n".join(
+                f"  - {p.artifact_type}: "
+                f"{'Found' if p.found else 'Not found'} ({p.detail})"
+                for p in app.presence
             )
-            severity_item.setForeground(QColor(_SEVERITY_COLORS[finding.severity]))
-            severity_item.setData(Qt.UserRole, index)
-            score_item = _SortableItem(str(finding.score), finding.score)
-            self._results_table.setItem(index, 0, severity_item)
-            self._results_table.setItem(index, 1, score_item)
-            self._results_table.setItem(index, 2, QTableWidgetItem(finding.rule_name))
-            self._results_table.setItem(index, 3, QTableWidgetItem(finding.description))
-        self._results_table.setSortingEnabled(True)
+            + f"\n\n{DISCLAIMER}"
+        )
+        self._set_detail_text(detail)
+
+    def _populate_results(self, findings: list[CorrelationFinding]) -> None:
+        """Populate the rule-based findings tree, grouped by rule category.
+
+        Args:
+            findings: The findings to display, already in display
+                order (severity/score descending; see
+                :meth:`_handle_analysis_result`).
+        """
+        self._findings_tree.clear()
+        findings_by_category: dict[str, list[tuple[int, CorrelationFinding]]] = {}
+        for index, finding in enumerate(findings):
+            rule_cls = RULE_REGISTRY.get(finding.rule_name)
+            category = rule_cls.category if rule_cls is not None else "other"
+            findings_by_category.setdefault(category, []).append((index, finding))
+
+        for category in sorted(findings_by_category):
+            category_findings = findings_by_category[category]
+            category_item = QTreeWidgetItem(
+                self._findings_tree,
+                ["", "", _rule_category_label(category), f"{len(category_findings)} finding(s)"],
+            )
+            for index, finding in category_findings:
+                child = QTreeWidgetItem(
+                    category_item,
+                    [
+                        finding.severity.value.upper(),
+                        str(finding.score),
+                        finding.rule_name,
+                        finding.description,
+                    ],
+                )
+                child.setForeground(0, QColor(_SEVERITY_COLORS[finding.severity]))
+                child.setData(0, Qt.UserRole, index)
+            category_item.setExpanded(True)
 
     def _on_finding_selected(self) -> None:
         """Show full detail for the selected finding in the detail pane."""
-        row = self._results_table.currentRow()
-        if row < 0:
+        items = self._findings_tree.selectedItems()
+        if not items:
             return
-        severity_item = self._results_table.item(row, 0)
-        if severity_item is None:
+        index = items[0].data(0, Qt.UserRole)
+        if index is None:
+            # A category header row (no finding of its own) was selected.
             return
-        finding = self._last_findings[severity_item.data(Qt.UserRole)]
+        finding = self._last_findings[index]
         detail = (
             f"Rule: {finding.rule_name}\n"
             f"Severity: {finding.severity.value.upper()}\n"
@@ -1811,7 +2163,25 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         except OSError as exc:
             QMessageBox.critical(self, "Export failed", str(exc))
             return
+        self._last_report_path = Path(target)
+        self._open_report_button.setEnabled(True)
         QMessageBox.information(self, "Export complete", f"Report saved to:\n{target}")
+
+    def _open_report(self) -> None:
+        """Open the most recently saved report in the default browser.
+
+        Unlike some other forensic triage tools' equivalent action,
+        this does not close the application afterward, so findings
+        stay browsable in the results views.
+        """
+        if self._last_report_path is not None:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._last_report_path)))
+
+    def _open_output_folder(self) -> None:
+        """Open the configured output directory in the system file browser."""
+        output_dir = self._output_dir_edit.text().strip()
+        if output_dir:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(output_dir))
 
     def _generate_sample_mft(self) -> None:
         """Generate a synthetic sample $MFT file and offer to re-scan the evidence source."""
@@ -1854,6 +2224,13 @@ def main() -> None:
     """Launch the Corrobora GUI application."""
     _configure_logging()
     app = QApplication(sys.argv)
+    # Windows' native style ("windowsvista") only partially honors custom
+    # QSS for certain native-drawn controls -- checkbox indicators in
+    # particular can silently ignore ::indicator color rules and fall
+    # back to native (theme-dependent, sometimes low-contrast) rendering.
+    # Fusion is Qt's cross-platform style and fully respects stylesheet
+    # sub-control rules, so _STYLESHEET's checkbox colors actually apply.
+    app.setStyle("Fusion")
     window = CorroboraMainWindow()
     window.show()
     sys.exit(app.exec_())

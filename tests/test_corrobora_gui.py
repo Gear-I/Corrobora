@@ -60,6 +60,19 @@ class TestRunAnalysis:
         assert outcome.error is None
         assert any(f.rule_name == "mft_timestomping_detected" for f in outcome.findings)
 
+    def test_app_corroboration_is_populated_end_to_end(self, tmp_path: Path) -> None:
+        # generate_sample_mft_bytes() includes one .exe filename
+        # (svchost_updater.exe), so it should surface as an
+        # MFT-only-corroborated candidate application.
+        mft_file = tmp_path / "MFT"
+        mft_file.write_bytes(generate_sample_mft_bytes())
+
+        outcome = run_analysis([], [], [], [str(mft_file)])
+
+        assert outcome.error is None
+        applications = {app.application for app in outcome.app_corroboration}
+        assert "svchost_updater.exe" in applications
+
     def test_nonexistent_path_is_skipped_not_raised(self, tmp_path: Path) -> None:
         # build_context's per-file loaders catch and log file-level
         # failures rather than propagating them, so a missing file
