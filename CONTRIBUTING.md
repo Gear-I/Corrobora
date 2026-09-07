@@ -1,10 +1,10 @@
-# Contributing to VeriTrace
+# Contributing to Corrobora
 
-Thank you for your interest in contributing to **VeriTrace**!
+Thank you for your interest in contributing to **Corrobora**!
 
-VeriTrace is an open-source Windows digital forensics framework focused on detecting potential indicators of anti-forensic activity through cross-artifact consistency analysis. The goal of the project is to support investigators by improving confidence in digital evidence through transparent, explainable, and repeatable forensic analysis.
+Corrobora is an open-source Windows digital forensics framework focused on detecting potential indicators of anti-forensic activity through cross-artifact consistency analysis. The goal of the project is to support investigators by improving confidence in digital evidence through transparent, explainable, and repeatable forensic analysis.
 
-At this stage, VeriTrace is being developed as part of a master's capstone project. Contributions are welcome as the project matures.
+At this stage, Corrobora is being developed as part of a master's capstone project (originally under the name VeriTrace -- see the README's Project History section). Contributions are welcome as the project matures.
 
 ---
 
@@ -31,7 +31,8 @@ Please:
 
 Recommended environment:
 
-- Python 3.12+
+- Python 3.11+ (see `pyproject.toml`'s `requires-python`; the desktop GUI and disk-image
+  support depend on packages with prebuilt wheels for 3.11-3.13)
 - Visual Studio Code
 - Git
 - GitHub
@@ -39,21 +40,26 @@ Recommended environment:
 Clone the repository:
 
 ```bash
-git clone https://github.com/Gear-I/VeriTrace.git
-cd VeriTrace
+git clone https://github.com/Gear-I/Corrobora.git
+cd Corrobora
 ```
 
-Install dependencies:
+Install in editable mode, with the development extras (test runner and linters):
 
 ```bash
-pip install -r requirements.txt
+pip install -e ".[dev]"
 ```
+
+Two more optional extras exist for specific capabilities you may not need for every
+change: `pip install -e ".[progress]"` (progress bars for large EVTX parses) and
+`pip install -e ".[images]"` (disk image ingestion -- E01/EWF, VHD/VHDX, VMDK, raw/dd).
+See the README's Installation section for details.
 
 ---
 
 ## Coding Standards
 
-VeriTrace follows the following standards:
+Corrobora follows the following standards:
 
 - PEP 8
 - Type hints
@@ -75,10 +81,13 @@ Run all unit tests before submitting a pull request.
 pytest
 ```
 
-Run Pylint:
+Run Pylint exactly as CI does (the project currently holds a 10.00/10 score --
+please keep it there, adding a documented `# pylint: disable=...` with a
+rationale comment for any genuine false positive rather than a blanket
+suppression):
 
 ```bash
-pylint veritrace/
+pylint $(git ls-files '*.py')
 ```
 
 Pull requests should pass all GitHub Actions workflows.
@@ -107,22 +116,21 @@ test/registry-tests
 
 ## Commit Messages
 
-Use Conventional Commits whenever possible.
+This project does not use Conventional Commits (`feat:`/`fix:`/`docs:` prefixes) --
+write a plain, imperative-mood summary line instead, followed by a blank line and a
+body explaining *why* the change was made (not just what changed; the diff already
+shows that).
 
-Examples:
+Examples, matching this project's actual history:
 
 ```
-feat: add registry parser
+Add disk image support (E01/EWF, VHD/VHDX, VMDK, raw/dd)
 
-feat(parser): implement prefetch parser
+Fix pylint findings and the bugs they caught
 
-fix: correct EVTX timestamp parsing
+Extract correlation rules into a plugin-style rules layer
 
-docs: update README
-
-test: add parser unit tests
-
-refactor: simplify correlation engine
+Restructure Findings into a per-application corroboration view
 ```
 
 ---
@@ -189,22 +197,28 @@ Please describe:
 
 ## Project Goals
 
-Version 1 focuses on:
+Version 1 currently supports:
 
 - Windows Event Logs (EVTX)
 - Windows Registry
 - Windows Prefetch
-- Cross-artifact consistency analysis
+- NTFS Master File Table (MFT), including timestomping detection
+- A modular, rule-based cross-artifact correlation engine (see `src/corrobora/rules/`),
+  including per-application cross-artifact corroboration scoring
+- Disk image ingestion (E01/EWF, VHD/VHDX, VMDK, raw/dd) as an alternative to an
+  already-extracted evidence folder -- see the optional `images` extra
+- A PyQt5 desktop GUI
 - HTML reporting
-- JSON reporting
 
-Future releases may include support for additional Windows forensic artifacts.
+JSON reporting has been discussed but is not implemented yet -- it's a reasonable
+first contribution if you're looking for one. Future releases may include support for
+additional Windows forensic artifacts (e.g. Amcache, SRUM, Jump Lists).
 
 ---
 
 ## Security
 
-If you discover a security issue within VeriTrace itself, please do not publicly disclose it immediately.
+If you discover a security issue within Corrobora itself, please do not publicly disclose it immediately.
 
 Instead, open a private discussion or contact the project maintainer.
 
@@ -212,12 +226,12 @@ Instead, open a private discussion or contact the project maintainer.
 
 ## License
 
-By contributing to VeriTrace, you agree that your contributions will be licensed under the project's MIT License.
+By contributing to Corrobora, you agree that your contributions will be licensed under the project's MIT License.
 
 ---
 
 ## Thank You
 
-Thank you for helping improve VeriTrace and supporting the digital forensics community.
+Thank you for helping improve Corrobora and supporting the digital forensics community.
 
 Every contribution—whether code, documentation, bug reports, or ideas is appreciated.
