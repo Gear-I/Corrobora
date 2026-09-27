@@ -29,8 +29,9 @@ Command-line usage:
 
 from __future__ import annotations
 
+import argparse
 import logging
-import sys
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -679,19 +680,36 @@ class RegistryHiveParser(BaseArtifactParser):
 # --------------------------------------------------------------------------
 
 
-def _main() -> None:
-    """Run the parser as a script: ``corrobora-registry <hive-file> [root_path]``."""
+def _main(argv: Sequence[str] | None = None) -> None:
+    """Run the parser as a script: ``corrobora-registry <hive-file> [root_path]``.
+
+    Args:
+        argv: Arguments (without the program name); ``None`` uses
+            ``sys.argv``.
+    """
+    arg_parser = argparse.ArgumentParser(
+        prog="corrobora-registry",
+        description="Parse a Windows registry hive and log its keys and values.",
+    )
+    arg_parser.add_argument("hive", help="Path to the registry hive file.")
+    arg_parser.add_argument(
+        "root_path",
+        nargs="?",
+        default=None,
+        help=(
+            "Optional key path, relative to the hive root, to limit the walk to "
+            "(e.g. 'Software\\Microsoft'). Walks the whole hive if omitted."
+        ),
+    )
+    args = arg_parser.parse_args(argv)
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    if len(sys.argv) not in (2, 3):
-        print(f"Usage: python {sys.argv[0]} <path-to-hive-file> [root_path]")
-        raise SystemExit(1)
-
-    hive_path = sys.argv[1]
-    root_path = sys.argv[2] if len(sys.argv) == 3 else None
+    hive_path = args.hive
+    root_path = args.root_path
 
     parser = RegistryHiveParser(hive_path)
     try:
