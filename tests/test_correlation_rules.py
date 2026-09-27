@@ -49,13 +49,14 @@ def _make_event(
     event_id: int = 4688,
     timestamp: datetime | None = None,
     message: str = "",
+    provider_name: str = "Microsoft-Windows-Security-Auditing",
 ) -> EventRecord:
     """Build a minimal EventRecord for testing."""
     return EventRecord(
         record_number=record_number,
         event_id=event_id,
         timestamp=timestamp or datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
-        provider_name="Microsoft-Windows-Security-Auditing",
+        provider_name=provider_name,
         computer_name="HOST01",
         channel="Security",
         level=0,
@@ -290,6 +291,99 @@ class TestPrefetchExecutionWithoutEvtxRule:
         findings = rule.evaluate(context)
 
         assert not findings
+
+    def test_evtx_without_process_creation_events_gives_one_info_finding(self) -> None:
+        # Regression test: with a Security log loaded but process-creation
+        # auditing off (the Windows default), there are no 4688 events and
+        # the rule used to flag every Prefetch run as MEDIUM. It now reports
+        # the coverage gap once, at INFO.
+        runs = tuple(datetime(2024, 3, 15, hour, 0, 0, tzinfo=UTC) for hour in (8, 9, 10))
+        prefetch = _make_prefetch(executable_name="MALWARE.EXE", last_run_times=runs)
+        other = _make_prefetch(executable_name="CALC.EXE", last_run_times=runs[:1])
+        logon = _make_event(event_id=4624, message="malware.exe")
+        context = CorrelationContext(
+            evtx_entries=(EvtxEntry("Security.evtx", logon),),
+            registry_value_entries=(),
+            prefetch_entries=(
+                PrefetchEntry("MALWARE.EXE-3EA9C6F2.pf", prefetch),
+                PrefetchEntry("CALC.EXE-11111111.pf", other),
+            ),
+        )
+
+        findings = PrefetchExecutionWithoutEvtxRule().evaluate(context)
+
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.INFO
+        assert findings[0].score == 10
+        assert findings[0].description.startswith("4 Prefetch-recorded execution(s)")
+        assert "not an indication of tampering" in findings[0].description
+        assert findings[0].evidence == ("EVTX source checked: Security.evtx",)
+        assert findings[0].source_paths == ("Security.evtx",)
+
+    def test_event_id_1_from_other_provider_is_not_process_creation(self) -> None:
+        run_time = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        prefetch = _make_prefetch(executable_name="MALWARE.EXE", last_run_times=(run_time,))
+        kernel_event = _make_event(
+            event_id=1,
+            timestamp=run_time,
+            message="malware.exe",
+            provider_name="Microsoft-Windows-Kernel-General",
+        )
+        context = CorrelationContext(
+            evtx_entries=(EvtxEntry("System.evtx", kernel_event),),
+            registry_value_entries=(),
+            prefetch_entries=(PrefetchEntry("MALWARE.EXE-3EA9C6F2.pf", prefetch),),
+        )
+
+        findings = PrefetchExecutionWithoutEvtxRule().evaluate(context)
+
+        assert len(findings) == 1
+        assert findings[0].severity == Severity.INFO
+
+    def test_sysmon_event_1_corroborates(self) -> None:
+        run_time = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        prefetch = _make_prefetch(executable_name="MALWARE.EXE", last_run_times=(run_time,))
+        sysmon_event = _make_event(
+            event_id=1,
+            timestamp=run_time,
+            message=r"C:\Users\Public\malware.exe",
+            provider_name="Microsoft-Windows-Sysmon",
+        )
+        context = CorrelationContext(
+            evtx_entries=(EvtxEntry("Sysmon.evtx", sysmon_event),),
+            registry_value_entries=(),
+            prefetch_entries=(PrefetchEntry("MALWARE.EXE-3EA9C6F2.pf", prefetch),),
+        )
+
+        assert not PrefetchExecutionWithoutEvtxRule().evaluate(context)
+
+    def test_no_coverage_finding_when_no_runs_to_check(self) -> None:
+        prefetch = _make_prefetch(executable_name="MALWARE.EXE", last_run_times=())
+        context = CorrelationContext(
+            evtx_entries=(EvtxEntry("Security.evtx", _make_event(event_id=4624)),),
+            registry_value_entries=(),
+            prefetch_entries=(PrefetchEntry("MALWARE.EXE-3EA9C6F2.pf", prefetch),),
+        )
+
+        assert not PrefetchExecutionWithoutEvtxRule().evaluate(context)
+
+    def test_no_coverage_finding_caps_listed_sources(self) -> None:
+        run_time = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        prefetch = _make_prefetch(executable_name="MALWARE.EXE", last_run_times=(run_time,))
+        entries = tuple(
+            EvtxEntry(f"log{index:02d}.evtx", _make_event(event_id=4624)) for index in range(12)
+        )
+        context = CorrelationContext(
+            evtx_entries=entries,
+            registry_value_entries=(),
+            prefetch_entries=(PrefetchEntry("MALWARE.EXE-3EA9C6F2.pf", prefetch),),
+        )
+
+        findings = PrefetchExecutionWithoutEvtxRule().evaluate(context)
+
+        assert len(findings[0].evidence) == 11
+        assert findings[0].evidence[-1] == "... and 2 more EVTX source(s)"
+        assert len(findings[0].source_paths) == 12
 
 
 class TestRegistryPersistenceWithoutExecutionRule:
