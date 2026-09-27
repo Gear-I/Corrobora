@@ -17,6 +17,7 @@ messages, not a dedicated field.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from .base import CorrelationContext
@@ -45,14 +46,19 @@ class ArtifactPresence:
         artifact_type: The artifact type's display label (one of
             :data:`_ARTIFACT_TYPE_LABELS`).
         found: Whether this artifact type shows the application.
+            Always ``False`` when ``examined`` is ``False``.
         detail: A human-readable pointer to the match (a source path,
             registry key, or record reference), or a fixed
-            not-found message.
+            not-found / not-examined message.
+        examined: Whether any data of this artifact type was loaded.
+            An unexamined type says nothing about the application and
+            does not count against its score.
     """
 
     artifact_type: str
     found: bool
     detail: str
+    examined: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,15 +69,21 @@ class AppCorroboration:
         application: The application's filename, lowercased.
         presence: Exactly one :class:`ArtifactPresence` per entry in
             :data:`_ARTIFACT_TYPE_LABELS`, in that order.
-        score: 0-100, the percentage of artifact types with
-            ``found=True``.
-        assessment: A short, human-readable summary of ``score``.
+        score: 0-100, the percentage of *examined* artifact types with
+            ``found=True``. 0 when fewer than two types were examined,
+            since a single source cannot corroborate anything.
+        assessment: A short, human-readable summary stating how many
+            examined artifact types mention the application.
+        found_count: Number of artifact types with ``found=True``.
+        examined_count: Number of artifact types with data loaded.
     """
 
     application: str
     presence: tuple[ArtifactPresence, ...]
     score: int
     assessment: str
+    found_count: int
+    examined_count: int
 
 
 def _check_prefetch(application: str, context: CorrelationContext) -> ArtifactPresence:
@@ -121,28 +133,35 @@ def _check_evtx(application: str, context: CorrelationContext) -> ArtifactPresen
     )
 
 
-def _assess(score: int) -> str:
-    """Return a short human-readable summary for a corroboration score.
+def _assess(score: int, found: int, examined: int) -> str:
+    """Return a short human-readable summary of an application's corroboration.
 
-    Thresholds match the two labeled examples in this feature's
-    original design mockup: a 75% score ("3 of 4 artifacts") reads as
-    "Supported by multiple artifacts," and a 25% score ("1 of 4") reads
-    as limited corroboration. A low score describes how few sources
-    mention the application, not a detected problem: absent artifacts
-    are often explained by retention limits or an incomplete collection
-    (see :data:`DISCLAIMER`).
+    Score thresholds match the two labeled examples in this feature's
+    original design mockup: 75% ("3 of 4") reads as supported by
+    multiple artifacts, and 25% ("1 of 4") as limited corroboration.
+    Every assessment states the counts, so a score computed over fewer
+    examined types is never mistaken for one over all four. A low score
+    describes how few sources mention the application, not a detected
+    problem (see :data:`DISCLAIMER`).
 
     Args:
-        score: A 0-100 corroboration score.
+        score: The 0-100 corroboration score.
+        found: Number of artifact types that mention the application.
+        examined: Number of artifact types with data loaded.
 
     Returns:
         A one-sentence assessment.
     """
-    if score >= 75:
-        return "Supported by multiple artifacts."
-    if score >= 50:
-        return "Partially corroborated -- some artifacts missing."
-    return "Limited corroboration -- found in few artifact types."
+    if examined < 2:
+        return (
+            "Cannot be corroborated -- only one artifact type was examined."
+        )
+    counts = f"{found} of {examined} examined artifact types"
+    if found >= 2 and score >= 75:
+        return f"Supported by multiple artifacts ({counts})."
+    if found >= 2:
+        return f"Partially corroborated ({counts})."
+    return f"Limited corroboration -- found in only {counts}."
 
 
 def _candidate_applications(context: CorrelationContext) -> set[str]:
@@ -166,7 +185,11 @@ def _candidate_applications(context: CorrelationContext) -> set[str]:
 
 
 def build_app_corroboration(context: CorrelationContext) -> list[AppCorroboration]:
-    """Cross-reference every candidate application against all four artifact types.
+    """Cross-reference every candidate application against the examined artifact types.
+
+    Artifact types with no data loaded are reported as not examined and
+    excluded from the score, so an analysis without (say) an MFT does
+    not count the MFT as missing for every application.
 
     Args:
         context: The parsed artifacts to analyze.
@@ -175,22 +198,46 @@ def build_app_corroboration(context: CorrelationContext) -> list[AppCorroboratio
         One :class:`AppCorroboration` per candidate application found
         in Prefetch or MFT, sorted by application name.
     """
+    checks: tuple[tuple[str, bool, Callable[[str, CorrelationContext], ArtifactPresence]], ...] = (
+        ("Prefetch", bool(context.prefetch_entries), _check_prefetch),
+        ("Registry", bool(context.registry_value_entries), _check_registry),
+        ("Event Log", bool(context.evtx_entries), _check_evtx),
+        ("MFT", bool(context.mft_entries), _check_mft),
+    )
+    examined_count = sum(1 for _, examined, _ in checks if examined)
+
     results: list[AppCorroboration] = []
     for application in sorted(_candidate_applications(context)):
-        presence = (
-            _check_prefetch(application, context),
-            _check_registry(application, context),
-            _check_evtx(application, context),
-            _check_mft(application, context),
+        presence = tuple(
+            check(application, context) if examined else _not_examined(label)
+            for label, examined, check in checks
         )
         found_count = sum(1 for p in presence if p.found)
-        score = round(found_count / len(_ARTIFACT_TYPE_LABELS) * 100)
+        if examined_count < 2:
+            score = 0
+        else:
+            score = round(found_count / examined_count * 100)
         results.append(
             AppCorroboration(
                 application=application,
                 presence=presence,
                 score=score,
-                assessment=_assess(score),
+                assessment=_assess(score, found_count, examined_count),
+                found_count=found_count,
+                examined_count=examined_count,
             )
         )
     return results
+
+
+def _not_examined(label: str) -> ArtifactPresence:
+    """Presence entry for an artifact type with no data loaded.
+
+    "Examined" means at least one record of the type was loaded;
+    :class:`CorrelationContext` does not record which files were
+    provided, so a file that parsed to zero records also counts as not
+    examined.
+    """
+    return ArtifactPresence(
+        label, False, f"Not examined -- no {label} data was loaded.", examined=False
+    )
