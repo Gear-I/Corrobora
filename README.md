@@ -221,11 +221,55 @@ pylint src/Corrobora/parsers/*.py
   tested against synthetic data without requiring real forensic
   images.
 
-## Project status
+## Status and limitations
 
-This project is under active development. See `pyproject.toml` for a
-note on the current flat-module package layout and a planned
-namespaced-package refactor.
+Corrobora is **alpha software** (0.1.x) under active development.
+Output formats, commands, and APIs may change between releases.
+
+**Not validated for evidentiary use.** Results are leads for examiner
+review, not conclusions. Verify anything that matters against the
+source artifacts, e.g. with `Corrobora-corroborate --list-evidence`,
+which lists every record behind a result.
+
+What has and hasn't been tested:
+
+- **Real-data testing so far is one controlled test on one machine**
+  (Windows 11 Home, build 26200): `powershell.exe` run three times at
+  known times, then compared against Prefetch, the Security log (4688),
+  and BAM. The measured offsets are documented on `TimestampSemantics`
+  in `src/corrobora/models/evidence.py`. Other Windows versions and
+  builds are untested.
+- **The correlation window has no validated value.** On the test
+  machine, start-time sources agreed within about 30 ms, but that is
+  one machine, not a general threshold. The window is a required
+  argument and every report says so.
+- **Sysmon Event ID 1 extraction** is tested only against synthetic
+  events, not real Sysmon logs.
+
+Known limitations of the evidence itself:
+
+- **Security 4688 needs process-creation auditing**, which is off by
+  default on Windows. Without it, the Security log contains no
+  execution evidence.
+- **Prefetch** keeps only the eight most recent runs per program and is
+  disabled by default on Windows Server. Prefetch files with fewer than
+  eight recorded runs have not yet been tested.
+- **BAM** keeps only the most recent exit time per user and program, so
+  it can support at most one run.
+- By default `Corrobora-corroborate` reads only Security and Sysmon
+  logs; use `--all-evtx` to parse every `.evtx` file.
+
+Scope:
+
+- **Program-execution corroboration** currently uses Prefetch, Security
+  4688, Sysmon Event ID 1, and Registry BAM/DAM. MFT, Amcache, and
+  UserAssist are not yet evidence sources for it.
+- It is **command-line only** (`Corrobora-corroborate`). The desktop
+  GUI runs the older rule-based correlation engine and per-application
+  scores.
+- The older rules match executable names by substring in EVTX event
+  text, which is a heuristic: it can miss names that appear only in
+  unparsed fields and can over-match short names.
 
 ## Project History
 
