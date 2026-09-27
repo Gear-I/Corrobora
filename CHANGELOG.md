@@ -52,7 +52,11 @@ project and renamed on August 7, 2026.
 - **EZ Tools integration**: import CSV output from Eric Zimmerman's EZ
   Tools (`Corrobora-ez-import`) or run the tools directly
   (`Corrobora-ez-run`, optional).
-- **Desktop GUI** (`Corrobora-gui`, PyQt5) with HTML report export.
+- **Desktop GUI** (`Corrobora-gui`, PyQt5) with HTML report export. Enter
+  a correlation window next to **Process** to run program-execution
+  corroboration in the GUI: a filterable per-program results panel, with
+  the full report and evidence list for the selected program. It reuses
+  the artifacts already parsed for the rules, so no file is parsed twice.
 - **Continuous integration**: pytest on Windows for Python 3.11-3.13, and
   pylint.
 

@@ -50,6 +50,9 @@ interpretation to the examiner.
   interactively: point it at one evidence source, choose which
   artifact and validation-rule categories to run, and browse
   sortable/filterable, scored results with automatic HTML export.
+  Enter a correlation window next to **Process** to also run
+  program-execution corroboration; selecting a program shows its full
+  report and every evidence record.
 
 ## Installation
 
@@ -285,12 +288,16 @@ Scope:
 - **Program-execution corroboration** currently uses Prefetch, Security
   4688, Sysmon Event ID 1, and Registry BAM/DAM. MFT, Amcache, and
   UserAssist are not yet evidence sources for it.
-- It is **command-line only** (`Corrobora-corroborate`). The desktop
-  GUI runs the older rule-based correlation engine and per-application
-  scores.
-- The older rules match executable names by substring in EVTX event
-  text, which is a heuristic: it can miss names that appear only in
-  unparsed fields and can over-match short names.
+- It runs from `Corrobora-corroborate` and, when a correlation window
+  is entered, from the GUI's **Program Execution Corroboration** panel.
+  The GUI's HTML report export does not yet include its results.
+- The older rules and the GUI's **Application Corroboration** scores
+  match executable names by substring in EVTX event text and registry
+  value data. This is a heuristic: it can miss names that appear only
+  in unparsed fields (it does not find BAM entries, whose path is the
+  value *name*), and can over-match short names. The two GUI panels can
+  therefore disagree about the same program; the Program Execution
+  panel reads structured fields and is the more precise of the two.
 
 ## Project History
 

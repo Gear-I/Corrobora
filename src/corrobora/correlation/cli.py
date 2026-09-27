@@ -37,8 +37,8 @@ import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
-from pathlib import Path
 
+from corrobora.correlation.context import is_process_creation_log, is_system_hive
 from corrobora.correlation.program_execution import (
     SOURCE_LABELS,
     ProgramExecutionFinding,
@@ -138,7 +138,7 @@ def collect_evidence(artifacts: DiscoveredArtifacts, all_evtx: bool = False) -> 
     evtx_info = result.sources[ArtifactType.EVTX]
     selected_evtx = []
     for path in artifacts.evtx_paths:
-        if all_evtx or _is_process_creation_log(path):
+        if all_evtx or is_process_creation_log(path):
             selected_evtx.append(path)
         else:
             evtx_info.skipped.append(path)
@@ -147,7 +147,7 @@ def collect_evidence(artifacts: DiscoveredArtifacts, all_evtx: bool = False) -> 
     registry_info = result.sources[ArtifactType.REGISTRY]
     system_hives = []
     for path in artifacts.registry_paths:
-        if Path(path).name.lower() == "system":
+        if is_system_hive(path):
             system_hives.append(path)
         else:
             registry_info.skipped.append(path)
@@ -174,11 +174,6 @@ def _collect(
             continue
         info.parsed.append(path)
         records.extend(extracted)
-
-
-def _is_process_creation_log(path: str) -> bool:
-    name = Path(path).name.lower()
-    return name == "security.evtx" or "sysmon" in name
 
 
 def _extract_evtx_file(path: str) -> list[EvidenceRecord]:
