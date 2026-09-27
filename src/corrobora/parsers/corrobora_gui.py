@@ -85,6 +85,7 @@ from .correlation_engine import (  # pylint: disable=wrong-import-position
 from ..rules.app_corroboration import (  # pylint: disable=wrong-import-position
     DISCLAIMER,
     AppCorroboration,
+    ArtifactPresence,
     build_app_corroboration,
 )
 from ..rules.base import CorrelationRule  # pylint: disable=wrong-import-position
@@ -1164,6 +1165,26 @@ def _score_bar_color(score: int) -> QColor:
     return QColor(_SCORE_BAR_COLORS[-1][1])
 
 
+def _presence_status(presence: ArtifactPresence) -> tuple[tuple[str, str], str]:
+    """Return the display symbol, label, and color for one artifact presence.
+
+    An artifact type with no data loaded is shown as "Not Examined" in
+    grey rather than "Not Found" in red: it says nothing about the
+    application either way.
+
+    Args:
+        presence: The presence entry to describe.
+
+    Returns:
+        ``((symbol, label), color)``.
+    """
+    if not presence.examined:
+        return ("–", "Not Examined"), "#808b96"
+    if presence.found:
+        return ("✓", "Found"), "#2e7d32"
+    return ("✗", "Not Found"), "#c0392b"
+
+
 class _ScoreBarDelegate(QStyledItemDelegate):
     """Paints a tree/table cell as a filled bar followed by a percentage label.
 
@@ -2129,9 +2150,9 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
             top_item = QTreeWidgetItem(self._corroboration_tree, [app.application, str(app.score)])
             top_item.setData(0, Qt.UserRole, index)
             for presence in app.presence:
-                status = "✓ Found" if presence.found else "✗ Not Found"
-                child = QTreeWidgetItem(top_item, [presence.artifact_type, status])
-                child.setForeground(1, QColor("#2e7d32" if presence.found else "#c0392b"))
+                (symbol, label), color = _presence_status(presence)
+                child = QTreeWidgetItem(top_item, [presence.artifact_type, f"{symbol} {label}"])
+                child.setForeground(1, QColor(color))
             top_item.setExpanded(True)
 
     def _on_app_corroboration_selected(self) -> None:
@@ -2150,8 +2171,7 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
             f"Corroboration score: {app.score}/100\n\n"
             f"{app.assessment}\n\n"
             + "\n".join(
-                f"  - {p.artifact_type}: "
-                f"{'Found' if p.found else 'Not found'} ({p.detail})"
+                f"  - {p.artifact_type}: {_presence_status(p)[0][1]} ({p.detail})"
                 for p in app.presence
             )
             + f"\n\n{DISCLAIMER}"
