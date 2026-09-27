@@ -46,7 +46,12 @@ SEVERITY_ORDER: dict[Severity, int] = {
 
 @dataclass(frozen=True, slots=True)
 class CorrelationFinding:
-    """A single anti-forensic indicator surfaced by a correlation rule.
+    """A single discrepancy or anomaly surfaced by a correlation rule.
+
+    Some findings are positive anomalies (a Prefetch hash mismatch,
+    timestomping); others record only that expected corroborating
+    evidence was absent. Neither kind by itself establishes
+    anti-forensic activity; findings are leads for examiner review.
 
     Attributes:
         rule_name: The identifier of the rule that produced this

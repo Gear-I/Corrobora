@@ -23,10 +23,12 @@ class PrefetchExecutionWithoutEvtxRule(CorrelationRule):  # pylint: disable=too-
     process-creation event (by default, Event ID 4688 or Sysmon Event
     ID 1) within a configurable time window whose message text
     references the executable's name. If none is found, the
-    execution is flagged: it may indicate the corresponding EVTX
-    record was cleared, wiped, or never logged (e.g. auditing was
-    disabled), or that a legitimate execution simply predates the
-    available Security log data.
+    execution is flagged for examiner review. The most common causes
+    are benign: process-creation auditing is disabled by default on
+    Windows, the Security log may have rolled over since the run, and
+    the executable name may not appear in the event text this rule
+    searches. Cleared or altered logs are one possible explanation, but
+    this absence alone does not establish it.
 
     Note:
         Matching relies on a substring search of the executable name
@@ -89,7 +91,10 @@ class PrefetchExecutionWithoutEvtxRule(CorrelationRule):  # pylint: disable=too-
                             f"Prefetch shows '{record.executable_name}' executed at "
                             f"{run_time.isoformat()}, but no matching EVTX "
                             f"process-creation event was found within "
-                            f"{self._time_window}."
+                            f"{self._time_window}. This absence alone does not "
+                            f"establish log clearing: process-creation auditing "
+                            f"is off by default and logs roll over. Examiner "
+                            f"review is required."
                         ),
                         evidence=(
                             f"Prefetch source: {prefetch_entry.source_path}",

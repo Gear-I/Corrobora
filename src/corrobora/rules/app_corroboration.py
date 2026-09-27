@@ -126,8 +126,11 @@ def _assess(score: int) -> str:
 
     Thresholds match the two labeled examples in this feature's
     original design mockup: a 75% score ("3 of 4 artifacts") reads as
-    "Supported by multiple artifacts," and a 25% score ("1 of 4")
-    reads as "Artifact inconsistency detected."
+    "Supported by multiple artifacts," and a 25% score ("1 of 4") reads
+    as limited corroboration. A low score describes how few sources
+    mention the application, not a detected problem: absent artifacts
+    are often explained by retention limits or an incomplete collection
+    (see :data:`DISCLAIMER`).
 
     Args:
         score: A 0-100 corroboration score.
@@ -139,7 +142,7 @@ def _assess(score: int) -> str:
         return "Supported by multiple artifacts."
     if score >= 50:
         return "Partially corroborated -- some artifacts missing."
-    return "Artifact inconsistency detected."
+    return "Limited corroboration -- found in few artifact types."
 
 
 def _candidate_applications(context: CorrelationContext) -> set[str]:

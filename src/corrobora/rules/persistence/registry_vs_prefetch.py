@@ -40,11 +40,12 @@ class RegistryPersistenceWithoutExecutionRule(
     For each registry value under a known persistence key path (Run,
     RunOnce, etc.) whose data references an executable, this rule
     checks whether any Prefetch record shows that executable having
-    ever run. A persistence entry with no execution evidence may
-    indicate the entry was recently planted and hasn't fired yet, or
-    that the corresponding Prefetch file was deliberately deleted to
-    hide execution (Prefetch deletion/disabling is a well-known
-    anti-forensic technique).
+    ever run. A persistence entry with no execution evidence has
+    several possible explanations: the program has not run since the
+    entry was added, Prefetch is disabled (the default on Windows
+    Server editions), or its Prefetch file was evicted as newer ones
+    were created. Deliberate deletion of the Prefetch file is also
+    possible, but this absence alone does not establish it.
 
     Note:
         This rule flags an *absence* of evidence, which is inherently
@@ -108,7 +109,10 @@ class RegistryPersistenceWithoutExecutionRule(
                         f"Registry persistence entry '{entry.value.key_path}\\"
                         f"{entry.value.name or '(default)'}' references "
                         f"'{exe_name}', but no Prefetch evidence of it ever "
-                        f"executing was found."
+                        f"executing was found. This absence alone does not "
+                        f"establish Prefetch deletion: the program may not "
+                        f"have run yet, or Prefetch may be disabled or its "
+                        f"file evicted. Examiner review is required."
                     ),
                     evidence=(
                         f"Registry source: {entry.source_path}",

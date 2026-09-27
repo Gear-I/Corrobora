@@ -185,6 +185,8 @@ class TestPrefetchExecutionWithoutEvtxRule:
         assert findings[0].severity == Severity.MEDIUM
         assert findings[0].score == 45
         assert "MALWARE.EXE" in findings[0].description
+        assert "does not establish log clearing" in findings[0].description
+        assert "Examiner review is required." in findings[0].description
 
     def test_returns_no_findings_when_no_evtx_data_provided_at_all(self) -> None:
         # Regression test: with zero EVTX entries in the context, the rule
@@ -313,6 +315,8 @@ class TestRegistryPersistenceWithoutExecutionRule:
         assert findings[0].rule_name == "persistence_without_execution"
         assert findings[0].score == 35
         assert "malware.exe" in findings[0].description
+        assert "does not establish Prefetch deletion" in findings[0].description
+        assert "Examiner review is required." in findings[0].description
 
     def test_does_not_flag_when_prefetch_shows_execution(self) -> None:
         value = _make_registry_value(data="C:\\Users\\Public\\malware.exe")
