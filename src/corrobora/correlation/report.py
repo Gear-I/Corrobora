@@ -19,7 +19,7 @@ from corrobora.parsers.Base import ArtifactType
 
 _RULE = "-" * 48
 
-_STATUS_LABELS = {
+STATUS_LABELS = {
     CorroborationStatus.CORROBORATED: "CORROBORATED",
     CorroborationStatus.PARTIALLY_CORROBORATED: "PARTIALLY CORROBORATED",
     CorroborationStatus.NEEDS_REVIEW: "NEEDS REVIEW",
@@ -50,7 +50,7 @@ def render_program_execution_report(finding: ProgramExecutionFinding) -> str:
     for source in finding.sources:
         lines.append("")
         lines.extend(_source_lines(source, finding.status))
-    lines += ["", _RULE, "", f"Result: {_STATUS_LABELS[finding.status]}", ""]
+    lines += ["", _RULE, "", f"Result: {STATUS_LABELS[finding.status]}", ""]
     for sentence in finding.explanation:
         lines.append(sentence)
     return "\n".join(lines) + "\n"

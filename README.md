@@ -97,6 +97,7 @@ built for Windows forensic artifacts specifically).
 | `Corrobora-mft` | Parse a raw `$MFT` file and detect timestomping |
 | `Corrobora-correlate` | Run the full cross-artifact correlation engine |
 | `Corrobora-case` | Auto-discover artifacts in a case folder, `.zip`, or disk image |
+| `Corrobora-corroborate` | Check whether Prefetch, EVTX, and Registry (BAM/DAM) corroborate program execution |
 | `Corrobora-gui` | Launch the desktop GUI |
 
 For development (running the test suite and linters):
@@ -175,6 +176,13 @@ Corrobora-case "C:\triage\case001" --analyze
 
 # Or point it straight at a disk image instead (requires the 'images' extra)
 Corrobora-case "C:\evidence\case001.E01" --analyze
+
+# Check whether independent sources corroborate PowerShell execution.
+# --window is required: there is no validated default.
+Corrobora-corroborate "C:\triage\case001" --window 300 --subject powershell.exe
+
+# Or summarize every program with execution evidence
+Corrobora-corroborate "C:\triage\case001" --window 300
 
 # Launch the GUI
 Corrobora-gui
