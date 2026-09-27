@@ -1,0 +1,41 @@
+name: Pytest
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  pytest:
+    # Corrobora parses Windows artifacts and is installed and run on
+    # Windows, so the tests run there too.
+    runs-on: windows-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # requires-python is >=3.11; the GUI and disk-image dependencies
+        # publish prebuilt wheels for 3.11-3.13.
+        python-version: ["3.11", "3.12", "3.13"]
+
+    env:
+      # GUI tests import PyQt5 but never open a window; this keeps any Qt
+      # initialization headless on the runner.
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Corrobora with development extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run pytest
+        run: pytest -q
