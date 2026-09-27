@@ -14,7 +14,7 @@ from corrobora.correlation.program_execution import (
     ProgramExecutionFinding,
     SourceObservation,
 )
-from corrobora.models.evidence import EvidenceRecord
+from corrobora.models.evidence import EvidenceRecord, TimestampAnchor
 from corrobora.parsers.Base import ArtifactType
 
 _RULE = "-" * 48
@@ -66,8 +66,15 @@ def _source_lines(source: SourceObservation, status: CorroborationStatus) -> lis
         lines.append("Timestamp: none recorded")
     else:
         stamp = record.timestamp.strftime("%Y-%m-%d %H:%M:%S UTC")
+        is_exit = record.timestamp_semantics.anchor is TimestampAnchor.PROCESS_END
+        if is_exit:
+            stamp += " (process exit)"
         if not source.in_window and status is not CorroborationStatus.NEEDS_REVIEW:
-            stamp += " (outside correlation window)"
+            stamp += (
+                " (does not follow the agreeing start times)"
+                if is_exit
+                else " (outside correlation window)"
+            )
         lines.append(f"Timestamp: {stamp}")
     lines.extend(_detail_lines(record))
     if record.artifact_type is ArtifactType.REGISTRY:

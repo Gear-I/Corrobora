@@ -11,9 +11,22 @@ Method:
 2. Group them by artifact source. Each :class:`ArtifactType` counts as
    one source: two EVTX files (e.g. Security and Sysmon) are one source,
    not two, which is the conservative choice.
-3. Find the tightest group of timed records whose total spread
-   (latest minus earliest) is within the window and which covers the
-   most distinct sources.
+3. Build an agreeing group from timestamps according to what they
+   record (:class:`~corrobora.models.evidence.TimestampAnchor`):
+
+   - **Start-anchored** timestamps (Prefetch run times, 4688/Sysmon 1)
+     agree if their total spread (latest minus earliest) is within the
+     window.
+   - **End-anchored** timestamps (BAM, which records process exit) are
+     not compared with the window: their distance from the start is
+     however long the program ran. An end-anchored record joins a
+     start group if it is at or after the group's latest start and no
+     other start for the subject falls in between, i.e. it records the
+     exit of the most recent run that started before it. BAM keeps only
+     one time per user and program, so it can support at most one run.
+
+   The best group covers the most distinct sources; ties go to the most
+   recent group, then the tightest.
 4. Classify:
 
    - ``CORROBORATED``: at least two sources fall in that group, and every
@@ -31,7 +44,8 @@ is still being established (see
 does not presume a correct value. The window used is carried on every
 finding so reports can state it.
 
-Only the single best-agreeing group is evaluated. Other recorded runs of
+The window applies to start-anchored timestamps only. Only the single
+best-agreeing group is evaluated. Other recorded runs of
 the same program (Prefetch keeps up to eight) are not individually
 assessed, and their lack of corroboration is not reported as a
 discrepancy.
@@ -47,7 +61,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
 
-from corrobora.models.evidence import EvidenceRecord, EvidenceType, TimestampSemantics
+from corrobora.models.evidence import EvidenceRecord, EvidenceType, TimestampAnchor
 from corrobora.parsers.Base import ArtifactType
 
 # Display order for sources in findings and reports; any other artifact
@@ -93,7 +107,9 @@ class SourceObservation:
             timed record nearest the group (or the most recent timed
             record if there is no group); otherwise an untimed record;
             ``None`` if ``evidence`` is empty.
-        in_window: Whether this source is part of the agreeing group.
+        in_window: Whether this source is part of the agreeing group
+            (for an end-anchored source, whether its exit time follows
+            the group's starts as described in the module docstring).
     """
 
     artifact_type: ArtifactType
@@ -151,7 +167,8 @@ def correlate_program_execution(
             Registry was not examined". Any source that contributed
             evidence is treated as examined even if not listed.
         window: The maximum spread between the earliest and latest
-            timestamps of records counted as agreeing. Must be positive.
+            start-anchored timestamps counted as agreeing. Must be
+            positive. End-anchored timestamps are not bounded by it.
 
     Returns:
         The finding, or ``None`` if no source contains execution evidence
@@ -181,7 +198,9 @@ def correlate_program_execution(
         # A single source "agreeing with itself" is not corroboration.
         group = []
     group_sources = {record.artifact_type: record for record in group}
-    group_midpoint = _midpoint(group)
+    group_midpoint = _midpoint(
+        [r for r in group if _anchor(r) is TimestampAnchor.PROCESS_START]
+    )
 
     sources = tuple(
         _observe(
@@ -236,51 +255,72 @@ def correlate_all_program_execution(
 # --------------------------------------------------------------------------
 
 
+def _anchor(record: EvidenceRecord) -> TimestampAnchor:
+    """The record's anchor, or ``NOT_EXECUTION_TIME`` if it has no timestamp."""
+    if record.timestamp is None:
+        return TimestampAnchor.NOT_EXECUTION_TIME
+    return record.timestamp_semantics.anchor
+
+
 def _is_timed(record: EvidenceRecord) -> bool:
-    return (
-        record.timestamp is not None
-        and record.timestamp_semantics is not TimestampSemantics.UNKNOWN
-    )
+    return _anchor(record) is not TimestampAnchor.NOT_EXECUTION_TIME
 
 
 def _best_group(records: list[EvidenceRecord], window: timedelta) -> list[EvidenceRecord]:
-    """Find the group of timed records covering the most distinct sources.
+    """Find the agreeing group covering the most distinct sources.
 
-    Slides over the timed records in time order, considering every run of
-    records whose spread is within ``window``. The best run covers the
-    most distinct sources; ties go to the smallest spread, then the most
-    recent. From the best run, one record per source is kept (the one
-    closest to the run's midpoint).
+    Slides over the start-anchored records in time order, considering
+    every run of records whose spread is within ``window``. Each run keeps
+    one record per source (the one closest to the run's midpoint), then
+    gains one end-anchored record per source that records the exit of
+    that run (see the module docstring). The best group covers the most
+    distinct sources; ties go to the most recent run, then the tightest.
 
     Returns:
-        One record per source in the best group, or an empty list if no
-        record is timed.
+        One record per source in the best group, or an empty list if
+        there is no start-anchored record.
     """
-    timed = sorted((r for r in records if _is_timed(r)), key=lambda r: r.timestamp)
+    starts = sorted(
+        (r for r in records if _anchor(r) is TimestampAnchor.PROCESS_START),
+        key=lambda r: r.timestamp,
+    )
+    ends = sorted(
+        (r for r in records if _anchor(r) is TimestampAnchor.PROCESS_END),
+        key=lambda r: r.timestamp,
+    )
     best: list[EvidenceRecord] = []
-    best_key: tuple[int, timedelta, datetime] | None = None
-    start = 0
-    for end, record in enumerate(timed):
-        while record.timestamp - timed[start].timestamp > window:
-            start += 1
-        run = timed[start : end + 1]
-        key = (
-            len({r.artifact_type for r in run}),
-            -(record.timestamp - run[0].timestamp),
-            record.timestamp,
+    best_key: tuple[int, datetime, timedelta] | None = None
+    first = 0
+    for last, record in enumerate(starts):
+        while record.timestamp - starts[first].timestamp > window:
+            first += 1
+        run = starts[first : last + 1]
+        next_start = next(
+            (r.timestamp for r in starts[last + 1 :] if r.timestamp > record.timestamp), None
         )
+        group = _one_per_source(run)
+        for end_record in ends:
+            if end_record.artifact_type in group:
+                continue
+            if end_record.timestamp >= record.timestamp and (
+                next_start is None or end_record.timestamp < next_start
+            ):
+                group[end_record.artifact_type] = end_record
+        key = (len(group), record.timestamp, -(record.timestamp - run[0].timestamp))
         if best_key is None or key > best_key:
-            best_key, best = key, run
+            best_key, best = key, list(group.values())
+    return best
 
-    if not best:
-        return []
-    midpoint = _midpoint(best)
+
+def _one_per_source(run: list[EvidenceRecord]) -> dict[ArtifactType, EvidenceRecord]:
+    """Keep, per source, the record in ``run`` closest to the run's midpoint."""
+    midpoint = _midpoint(run)
     chosen: dict[ArtifactType, EvidenceRecord] = {}
-    for record in best:
+    for record in run:
         current = chosen.get(record.artifact_type)
         if current is None or _distance(record, midpoint) < _distance(current, midpoint):
             chosen[record.artifact_type] = record
-    return list(chosen.values())
+    return chosen
 
 
 def _midpoint(records: list[EvidenceRecord]) -> datetime | None:
@@ -336,7 +376,14 @@ def _join(labels: list[str]) -> str:
 def _absence_sentence(source: SourceObservation) -> str:
     if not source.observed:
         return f"No corresponding {source.label} evidence was identified."
-    if source.representative is not None and _is_timed(source.representative):
+    record = source.representative
+    if record is not None and _anchor(record) is TimestampAnchor.PROCESS_END:
+        return (
+            f"{source.label} evidence was identified, but the exit time it records does "
+            "not follow the other sources' most recent start. This is expected if the "
+            "program was still running when the evidence was collected."
+        )
+    if record is not None and _is_timed(record):
         return (
             f"{source.label} evidence was identified, but not within the "
             "configured correlation window of the other sources."
@@ -350,15 +397,33 @@ def _explain(
     agreeing = [s.label for s in sources if s.in_window]
     others = [s for s in sources if not s.in_window]
 
+    exit_labels = [
+        s.label
+        for s in sources
+        if s.in_window
+        and s.representative is not None
+        and _anchor(s.representative) is TimestampAnchor.PROCESS_END
+    ]
+    exit_note = (
+        (
+            f"{_join(exit_labels)} records the program's exit after these start times, "
+            "consistent with the same run.",
+        )
+        if exit_labels
+        else ()
+    )
+
     if status is CorroborationStatus.CORROBORATED:
         return (
             f"{len(agreeing)} independent artifact sources contain evidence consistent "
             f"with {subject} execution within the configured correlation window.",
+            *exit_note,
             "Examiner review is recommended.",
         )
     if status is CorroborationStatus.PARTIALLY_CORROBORATED:
         return (
             f"{_join(agreeing)} contain consistent evidence.",
+            *exit_note,
             *(_absence_sentence(s) for s in others),
             _NOT_ANTI_FORENSIC,
         )
@@ -377,7 +442,8 @@ def _explain(
     else:
         lead = (
             f"Evidence of {subject} execution exists in {_join([s.label for s in observed])}, "
-            "but no two sources fall within the configured correlation window."
+            "but no two sources are consistent with the same run within the "
+            "configured correlation window."
         )
     missing = [s for s in sources if not s.observed]
     return (
