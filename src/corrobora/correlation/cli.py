@@ -6,7 +6,9 @@ window, and optionally name one or more programs::
 
     corrobora-corroborate C:\\cases\\case001 --window 300 --subject powershell.exe
 
-With ``--subject``, a full report is printed for each named program.
+With ``--subject``, a full report is printed for each named program;
+adding ``--list-evidence`` also lists every execution record for it with
+millisecond timestamps, so each recorded run can be checked individually.
 Without it, a one-line summary is printed for every program that has
 execution evidence.
 
@@ -43,7 +45,11 @@ from corrobora.correlation.program_execution import (
     correlate_all_program_execution,
     correlate_program_execution,
 )
-from corrobora.correlation.report import STATUS_LABELS, render_program_execution_report
+from corrobora.correlation.report import (
+    STATUS_LABELS,
+    render_evidence_list,
+    render_program_execution_report,
+)
 from corrobora.extractors.evtx import extract_evtx_evidence
 from corrobora.extractors.prefetch import extract_prefetch_evidence
 from corrobora.extractors.registry import extract_registry_evidence
@@ -357,6 +363,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Parse every .evtx file, not only Security and Sysmon logs.",
     )
     parser.add_argument(
+        "--list-evidence",
+        action="store_true",
+        help=(
+            "After each --subject report, list every execution record for that program "
+            "with millisecond timestamps. Requires --subject."
+        ),
+    )
+    parser.add_argument(
         "--list-files",
         action="store_true",
         help="List every parsed file (by default only the first few per source).",
@@ -376,7 +390,10 @@ def _main(argv: Sequence[str] | None = None) -> int:
         The process exit code: 0 on success, 1 if the case cannot be
         loaded.
     """
-    args = _build_parser().parse_args(argv)
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if args.list_evidence and not args.subject:
+        parser.error("--list-evidence requires --subject")
     logging.basicConfig(
         level=logging.INFO if args.verbose else logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s",
@@ -417,6 +434,8 @@ def _main(argv: Sequence[str] | None = None) -> int:
         else:
             print()
             print(render_program_execution_report(finding))
+            if args.list_evidence:
+                print(render_evidence_list(collection.records, finding))
     return 0
 
 

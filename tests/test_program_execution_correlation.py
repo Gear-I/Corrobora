@@ -13,7 +13,7 @@ from corrobora.correlation.program_execution import (
     correlate_all_program_execution,
     correlate_program_execution,
 )
-from corrobora.correlation.report import render_program_execution_report
+from corrobora.correlation.report import render_evidence_list, render_program_execution_report
 from corrobora.extractors.evtx import SECURITY_AUDITING_PROVIDER, extract_evtx_evidence
 from corrobora.extractors.prefetch import extract_prefetch_evidence
 from corrobora.extractors.registry import extract_registry_evidence
@@ -299,6 +299,58 @@ class TestReport:
             _correlate([_ev(PREFETCH, 0), _ev(EVTX, 5), _ev(REGISTRY, -3600)])
         )
         assert "(process exit) (does not follow the agreeing start times)" in report
+
+
+class TestEvidenceList:
+    """The full per-record listing shown with --list-evidence."""
+
+    def _records(self):
+        return [
+            _ev(REGISTRY, None, ref="untimed"),
+            _ev(PREFETCH, 600.25, ref="run[0]"),
+            _ev(EVTX, 600.5, ref="record[2]"),
+            _ev(PREFETCH, 0, ref="run[1]"),
+            _ev(EVTX, 0.125, ref="record[1]"),
+            _ev(REGISTRY, 661, ref="bam"),
+            _ev(PREFETCH, 5, subject="cmd.exe", ref="other"),
+        ]
+
+    def _lines(self):
+        records = self._records()
+        finding = _correlate(records, window=timedelta(seconds=30))
+        return render_evidence_list(records, finding).splitlines()
+
+    def test_header_counts_subject_records_only(self):
+        assert self._lines()[0] == (
+            "All execution evidence for powershell.exe (2 Prefetch, 2 EVTX, 2 Registry)"
+        )
+
+    def test_time_order_with_milliseconds_and_untimed_last(self):
+        rows = [line for line in self._lines() if "2026-" in line or "no timestamp" in line]
+        stamps = [row.split("  ")[1].strip() if row.startswith(" ") else row for row in rows]
+        assert "2026-09-27 14:31:42.125" in rows[1]
+        assert "no timestamp" in rows[-1]
+        assert len(stamps) == 6
+
+    def test_agreeing_group_marked(self):
+        rows = self._lines()[3:-2]
+        marked = [row for row in rows if row.startswith("*")]
+        assert len(marked) == 3
+        assert "run[0]" in marked[0]
+        assert "record[2]" in marked[1]
+        assert "14:42:43.000  Registry  exit" in marked[2]
+
+    def test_untimed_record_has_no_mark(self):
+        assert "no timestamp             Registry  -" in self._lines()[-3]
+
+    def test_marks_and_legend(self):
+        lines = self._lines()
+        assert any(" start " in line and "run[1]" in line for line in lines)
+        assert any(" exit " in line for line in lines)
+        assert lines[-1].startswith("* = part of the agreeing group")
+
+    def test_other_subjects_excluded(self):
+        assert not any("other" in line for line in self._lines()[2:-2])
 
 
 # --------------------------------------------------------------------------

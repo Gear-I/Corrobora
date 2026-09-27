@@ -251,6 +251,22 @@ class TestMain:
         # EVTX alone fully corroborate.
         assert "Result: CORROBORATED" in out
 
+    def test_list_evidence(self, tmp_path, capsys):
+        case = _case(tmp_path, ["POWERSHELL.EXE-12345678.pf", "Security.evtx", "SYSTEM"])
+        cli._main(  # pylint: disable=protected-access
+            [str(case), "--window", "30", "--subject", "powershell.exe", "--list-evidence"]
+        )
+        out = capsys.readouterr().out
+        assert "All execution evidence for powershell.exe (1 Prefetch, 1 EVTX, 1 Registry)" in out
+        assert "2026-09-27 14:31:42.000  Prefetch  start" in out
+        assert "2026-09-27 14:31:51.000  Registry  exit   BAM ControlSet001" in out
+
+    def test_list_evidence_requires_subject(self, tmp_path, capsys):
+        with pytest.raises(SystemExit) as exc:
+            cli._main([str(tmp_path), "--window", "30", "--list-evidence"])  # pylint: disable=protected-access
+        assert exc.value.code == 2
+        assert "--list-evidence requires --subject" in capsys.readouterr().err
+
     def test_unknown_subject(self, tmp_path, capsys):
         case = _case(tmp_path, ["POWERSHELL.EXE-12345678.pf"])
         cli._main([str(case), "--window", "300", "--subject", "cmd.exe"])  # pylint: disable=protected-access
