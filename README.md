@@ -78,7 +78,28 @@ built for Windows forensic artifacts specifically).
    If `dir` doesn't find it, you're in the wrong folder -- fix that
    before continuing.
 
-3. Install the project in editable mode. Note the trailing `.` --
+3. *(Recommended)* Create and activate a virtual environment, so
+   Corrobora and its dependencies are isolated from your other Python
+   packages and its commands are on your `PATH` while the environment
+   is active:
+
+   ```powershell
+   py -3.11 -m venv .venv
+   .venv\Scripts\Activate.ps1
+   ```
+
+   In Command Prompt, activate with `.venv\Scripts\activate.bat`
+   instead. Your prompt shows `(.venv)` while it's active; run the
+   same activation command in each new terminal before using
+   Corrobora. If PowerShell refuses to run the activation script,
+   run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, or
+   use Command Prompt.
+
+   Skipping this step also works, but the `corrobora-*` commands are
+   then installed into your main Python's `Scripts` folder, which is
+   often not on `PATH` (see "Running commands from any folder" below).
+
+4. Install the project in editable mode. Note the trailing `.` --
    it means "install the project defined right here"; leaving it off
    causes a `-e option requires 1 argument` error.
 
@@ -90,14 +111,14 @@ built for Windows forensic artifacts specifically).
    `python-registry`, `libscca-python`) and registers the commands
    listed below.
 
-4. Verify it installed correctly:
+5. Verify it installed correctly:
 
    ```powershell
    pip show Corrobora
    ```
 
    This should print real package metadata. If it says "Package(s)
-   not found," step 3 didn't complete successfully -- scroll up in
+   not found," step 4 didn't complete successfully -- scroll up in
    its output for the actual error.
 
 | Command | What it does |
