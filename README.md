@@ -2,19 +2,24 @@
 
 # Corrobora
 
-Corrobora is a Python-based digital forensics framework for detecting
-indicators of anti-forensic activity on Windows systems through
-cross-artifact consistency analysis.
+Corrobora is a Python-based digital forensics framework that checks
+whether independent Windows artifacts corroborate each other.
 
 Rather than parsing a single artifact type in isolation, Corrobora
 cross-references independent evidence sources -- Windows Event Logs
 (EVTX), the Registry, Prefetch, and the NTFS Master File Table (MFT)
--- to surface disagreements between them that a single artifact alone
-would never reveal: a program with execution evidence in Prefetch but
-no corresponding EVTX log entry, registry persistence with no
-supporting execution evidence at all, a Prefetch file whose name
-doesn't match its own embedded hash, or a file whose timestamps show
-signs of deliberate backdating (timestomping).
+-- and reports where they agree and where they don't: whether
+Prefetch, a process-creation event, and a BAM entry all place a
+program's execution at the same time; a Prefetch file whose name
+doesn't match its own embedded hash; or a file whose timestamps show
+signs of backdating (timestomping).
+
+A missing or disagreeing artifact is reported as a discrepancy for
+examiner review, not as proof of tampering. Artifacts are routinely
+absent for ordinary reasons -- auditing that is off by default, log
+rollover, Prefetch eviction, or an incomplete collection -- so
+Corrobora states what it compared and what it found, and leaves the
+interpretation to the examiner.
 
 ## Features
 
@@ -23,13 +28,19 @@ signs of deliberate backdating (timestomping).
 - **Registry parser** -- recursive hive walking with full key/value
   extraction and LastWrite timestamp tracking.
 - **Prefetch parser** -- execution history extraction, including
-  filename/embedded-hash tamper detection.
+  filename/embedded-hash mismatch detection.
 - **MFT parser** -- a from-scratch NTFS binary parser (no third-party
   dependency) with built-in timestomping detection via
   $STANDARD_INFORMATION vs. $FILE_NAME comparison.
+- **Program-execution corroboration** -- normalizes execution evidence
+  from Prefetch, EVTX (Security 4688 / Sysmon 1), and Registry BAM/DAM
+  into one common record, then reports whether the sources agree
+  within an examiner-chosen time window: *Corroborated*, *Partially
+  Corroborated*, or *Needs Review*, with a plain-language explanation.
+  Run it with `Corrobora-corroborate`.
 - **Correlation engine** -- a rule-based, fully deterministic (no AI/ML)
   engine that cross-references all four artifact types to surface
-  anti-forensic indicators, ranked by severity.
+  discrepancies and anomalies for examiner review, ranked by severity.
 - **Disk image support** *(optional)* -- point Corrobora directly at a
   raw forensic disk image (E01/EWF, VHD/VHDX, VMDK, or raw/dd) instead
   of an already-extracted folder; known artifacts are extracted
@@ -199,7 +210,7 @@ pylint src/Corrobora/parsers/*.py
 
 ## Design principles
 
-- **No AI/ML.** Every detection rule is deterministic and explainable
+- **No AI/ML.** Every rule is deterministic and explainable
   -- a finding can always be traced back to the exact fields and
   comparison that produced it.
 - **Resilient parsing.** A single corrupted or unreadable record,
