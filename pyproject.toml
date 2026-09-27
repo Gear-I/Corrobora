@@ -58,8 +58,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/Corrobora"
-Repository = "https://github.com/yourusername/Corrobora"
+Homepage = "https://github.com/Gear-I/Corrobora"
+Repository = "https://github.com/Gear-I/Corrobora"
+Issues = "https://github.com/Gear-I/Corrobora/issues"
 
 # --- Console entry points -----------------------------------------------
 # Lets you run e.g. `corrobora-evtx Security.evtx` from anywhere on your
