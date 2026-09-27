@@ -38,9 +38,10 @@ Command-line usage:
 
 from __future__ import annotations
 
+import argparse
 import logging
 import re
-import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -833,23 +834,30 @@ def _run_folder(folder_path: Path) -> None:
     )
 
 
-def _main() -> None:
+def _main(argv: Sequence[str] | None = None) -> None:
     """Run the parser as a script against either a single file or a folder.
 
     Usage:
         corrobora-prefetch <path-to-file.pf>
         corrobora-prefetch <path-to-folder>
+
+    Args:
+        argv: Arguments (without the program name); ``None`` uses
+            ``sys.argv``.
     """
+    arg_parser = argparse.ArgumentParser(
+        prog="corrobora-prefetch",
+        description="Parse a Windows Prefetch (.pf) file, or every .pf file in a folder.",
+    )
+    arg_parser.add_argument("target", help="Path to a .pf file or a folder of .pf files.")
+    args = arg_parser.parse_args(argv)
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    if len(sys.argv) != 2:
-        print(f"Usage: python {sys.argv[0]} <path-to-file.pf-or-folder>")
-        raise SystemExit(1)
-
-    target = Path(sys.argv[1])
+    target = Path(args.target)
 
     if target.is_dir():
         _run_folder(target)
