@@ -4,24 +4,39 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from corrobora.extractors.evtx import SECURITY_AUDITING_PROVIDER, SYSMON_PROVIDER
+
 from ..base import CorrelationContext, CorrelationFinding, CorrelationRule, EvtxEntry, Severity
 
-# EVTX Event IDs that represent process creation, used to look for
-# corroborating evidence of a Prefetch-recorded execution.
-_DEFAULT_PROCESS_CREATION_EVENT_IDS = frozenset({4688, 1})  # Security 4688, Sysmon 1
+# (provider, Event ID) pairs that represent process creation, used to
+# look for corroborating evidence of a Prefetch-recorded execution.
+# Matched on both: Event IDs are only unique within a provider, and
+# Event ID 1 in particular is logged by many unrelated providers (e.g.
+# Kernel-General in the System log).
+_DEFAULT_PROCESS_CREATION_EVENTS = frozenset(
+    {(SECURITY_AUDITING_PROVIDER, 4688), (SYSMON_PROVIDER, 1)}
+)
 
 # Corroboration-strength score for this rule's findings: absence-based
 # (no matching EVTX event found), which is a weaker signal than a
 # positive tamper indicator -- see the rule's own docstring.
 _SCORE = 45
 
+# Score for the single coverage finding emitted when the loaded EVTX data
+# contains no process-creation events at all: it records a limit of the
+# evidence, not anything about any particular execution.
+_NO_COVERAGE_SCORE = 10
+
+# How many EVTX source paths to list as evidence on the coverage finding.
+_MAX_LISTED_SOURCES = 10
+
 
 class PrefetchExecutionWithoutEvtxRule(CorrelationRule):  # pylint: disable=too-few-public-methods
     """Flags Prefetch-recorded executions with no corresponding EVTX event.
 
     For each Prefetch run timestamp, this rule looks for an EVTX
-    process-creation event (by default, Event ID 4688 or Sysmon Event
-    ID 1) within a configurable time window whose message text
+    process-creation event (by default, Security Event ID 4688 or Sysmon
+    Event ID 1, each from its own provider) within a configurable time window whose message text
     references the executable's name. If none is found, the
     execution is flagged for examiner review. The most common causes
     are benign: process-creation auditing is disabled by default on
@@ -29,6 +44,11 @@ class PrefetchExecutionWithoutEvtxRule(CorrelationRule):  # pylint: disable=too-
     the executable name may not appear in the event text this rule
     searches. Cleared or altered logs are one possible explanation, but
     this absence alone does not establish it.
+
+    If EVTX data was loaded but contains no process-creation events at
+    all, there is nothing to compare against: every run would be
+    flagged. The rule instead emits one ``INFO`` finding stating that
+    the Prefetch executions could not be checked.
 
     Note:
         Matching relies on a substring search of the executable name
@@ -47,18 +67,18 @@ class PrefetchExecutionWithoutEvtxRule(CorrelationRule):  # pylint: disable=too-
     def __init__(
         self,
         time_window: timedelta = timedelta(minutes=5),
-        process_creation_event_ids: frozenset[int] = _DEFAULT_PROCESS_CREATION_EVENT_IDS,
+        process_creation_events: frozenset[tuple[str, int]] = _DEFAULT_PROCESS_CREATION_EVENTS,
     ) -> None:
         """Initialize the rule.
 
         Args:
             time_window: How far before/after a Prefetch run
                 timestamp to search for a matching EVTX event.
-            process_creation_event_ids: The set of EVTX Event IDs
-                considered process-creation evidence.
+            process_creation_events: The ``(provider name, Event ID)``
+                pairs considered process-creation evidence.
         """
         self._time_window = time_window
-        self._process_creation_event_ids = process_creation_event_ids
+        self._process_creation_events = process_creation_events
 
     def evaluate(self, context: CorrelationContext) -> list[CorrelationFinding]:
         if not context.evtx_entries:
@@ -71,9 +91,17 @@ class PrefetchExecutionWithoutEvtxRule(CorrelationRule):  # pylint: disable=too-
         candidate_events = [
             entry
             for entry in context.evtx_entries
-            if entry.record.event_id in self._process_creation_event_ids
+            if (entry.record.provider_name, entry.record.event_id)
+            in self._process_creation_events
             and entry.record.timestamp is not None
         ]
+        if not candidate_events:
+            # EVTX data was loaded but holds no process-creation events
+            # (typically because process-creation auditing is off, the
+            # Windows default, and Sysmon isn't installed). Every run
+            # would trivially lack a match, so report the coverage gap
+            # once instead of flagging each execution.
+            return self._no_coverage_finding(context)
 
         findings: list[CorrelationFinding] = []
         for prefetch_entry in context.prefetch_entries:
@@ -136,3 +164,43 @@ class PrefetchExecutionWithoutEvtxRule(CorrelationRule):  # pylint: disable=too-
             if name_lower in message:
                 return True
         return False
+
+    def _no_coverage_finding(self, context: CorrelationContext) -> list[CorrelationFinding]:
+        """Build the single coverage-gap finding for EVTX without process creation.
+
+        Args:
+            context: The correlation context being evaluated.
+
+        Returns:
+            One ``INFO`` finding, or an empty list if there are no
+            Prefetch run times that would have been checked.
+        """
+        run_count = sum(
+            len(entry.record.last_run_times)
+            for entry in context.prefetch_entries
+            if entry.record.executable_name
+        )
+        if not run_count:
+            return []
+        evtx_sources = sorted({entry.source_path for entry in context.evtx_entries})
+        listed = evtx_sources[:_MAX_LISTED_SOURCES]
+        evidence = tuple(f"EVTX source checked: {path}" for path in listed)
+        if len(evtx_sources) > len(listed):
+            evidence += (f"... and {len(evtx_sources) - len(listed)} more EVTX source(s)",)
+        return [
+            CorrelationFinding(
+                rule_name=self.rule_name,
+                severity=Severity.INFO,
+                description=(
+                    f"{run_count} Prefetch-recorded execution(s) could not be checked "
+                    f"against EVTX: the loaded event logs contain no process-creation "
+                    f"events (Security 4688 or Sysmon 1). Process-creation auditing is "
+                    f"off by default on Windows and Sysmon is not installed by default. "
+                    f"This is a limit of the available evidence, not an indication of "
+                    f"tampering."
+                ),
+                evidence=evidence,
+                source_paths=tuple(evtx_sources),
+                score=_NO_COVERAGE_SCORE,
+            )
+        ]
