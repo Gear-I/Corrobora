@@ -5,7 +5,7 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 uses [Semantic Versioning](https://semver.org/). While the version is 0.x,
 commands, output formats, and APIs may change between minor releases.
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-09-27
 
 First public pre-release. Corrobora is **alpha software and is not
 validated for evidentiary use**; see "Status and limitations" in the README
