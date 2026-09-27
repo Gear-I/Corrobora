@@ -59,6 +59,9 @@ logger = logging.getLogger(__name__)
 _SELECT_CONTROL_SET_VALUES = ("Current", "Default", "LastKnownGood")
 _MODERATOR_SERVICES = ("bam", "dam")
 
+# Parsed files listed per source before summarizing the rest as a count.
+_MAX_LISTED_FILES = 5
+
 
 # --------------------------------------------------------------------------
 # Evidence collection
@@ -220,7 +223,11 @@ def _control_sets(select_values: list[RegistryValue]) -> list[str]:
 
 
 def render_collection_summary(
-    case: str, window: timedelta, collection: CollectionResult, mft_count: int
+    case: str,
+    window: timedelta,
+    collection: CollectionResult,
+    mft_count: int,
+    list_all_files: bool = False,
 ) -> str:
     """Describe what was examined, so every result can be read in context.
 
@@ -230,6 +237,9 @@ def render_collection_summary(
         collection: The collection result.
         mft_count: Number of MFT files discovered (not used by this
             analysis, but listed so their omission is visible).
+        list_all_files: List every parsed file. By default only the
+            first few per source are listed, followed by a count; failed
+            files are always listed in full.
 
     Returns:
         The summary text, ending with a newline.
@@ -255,8 +265,13 @@ def render_collection_summary(
             f"  {label}: {status} -- {len(info.parsed)} file(s) parsed, "
             f"{len(info.failed)} failed"
         )
-        for path in info.parsed:
+        shown = info.parsed if list_all_files else info.parsed[:_MAX_LISTED_FILES]
+        for path in shown:
             lines.append(f"      parsed: {path}")
+        if len(info.parsed) > len(shown):
+            lines.append(
+                f"      ... and {len(info.parsed) - len(shown)} more (use --list-files to show all)"
+            )
         for path, reason in info.failed:
             lines.append(f"      failed: {path} ({reason})")
         if info.skipped:
@@ -279,7 +294,7 @@ def render_subject_summary(findings: list[ProgramExecutionFinding]) -> str:
         return "No program-execution evidence was found in the examined sources.\n"
     width = max(len("Subject"), *(len(f.subject) for f in findings))
     status_width = max(len(label) for label in STATUS_LABELS.values())
-    lines = [f"{'Subject':<{width}}  {'Result':<{status_width}}  Sources in window"]
+    lines = [f"{'Subject':<{width}}  {'Result':<{status_width}}  Sources agreeing"]
     for finding in findings:
         agreeing = ", ".join(s.label for s in finding.sources if s.in_window) or "-"
         status = STATUS_LABELS[finding.status]
@@ -341,6 +356,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Parse every .evtx file, not only Security and Sysmon logs.",
     )
+    parser.add_argument(
+        "--list-files",
+        action="store_true",
+        help="List every parsed file (by default only the first few per source).",
+    )
     parser.add_argument("--verbose", action="store_true", help="Show parser progress logging.")
     return parser
 
@@ -369,7 +389,15 @@ def _main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     collection = collect_evidence(artifacts, all_evtx=args.all_evtx)
-    print(render_collection_summary(args.case, args.window, collection, len(artifacts.mft_paths)))
+    print(
+        render_collection_summary(
+            args.case,
+            args.window,
+            collection,
+            len(artifacts.mft_paths),
+            list_all_files=args.list_files,
+        )
+    )
 
     if not args.subject:
         findings = correlate_all_program_execution(

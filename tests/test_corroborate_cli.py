@@ -200,6 +200,33 @@ def _case(tmp_path: Path, names: list[str]) -> Path:
     return tmp_path
 
 
+class TestCollectionSummary:
+    """How the list of examined files is shown."""
+
+    def _collection(self) -> cli.CollectionResult:
+        result = cli.CollectionResult()
+        info = result.sources[ArtifactType.PREFETCH]
+        info.parsed = [f"APP{index}.EXE-00000000.pf" for index in range(8)]
+        info.failed = [(f"BAD{index}.pf", "bad signature") for index in range(7)]
+        return result
+
+    def test_parsed_files_truncated_by_default(self):
+        text = cli.render_collection_summary("case", timedelta(seconds=30), self._collection(), 0)
+        assert text.count("parsed: APP") == 5
+        assert "... and 3 more (use --list-files to show all)" in text
+
+    def test_failed_files_always_listed(self):
+        text = cli.render_collection_summary("case", timedelta(seconds=30), self._collection(), 0)
+        assert text.count("failed: BAD") == 7
+
+    def test_list_all_files(self):
+        text = cli.render_collection_summary(
+            "case", timedelta(seconds=30), self._collection(), 0, list_all_files=True
+        )
+        assert text.count("parsed: APP") == 8
+        assert "more (use --list-files" not in text
+
+
 class TestMain:
     """Command-line behaviour end to end, with real case discovery."""
 

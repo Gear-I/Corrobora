@@ -23,9 +23,19 @@ Timestamp semantics:
     you know what each one records. Every ``EvidenceRecord`` therefore
     carries a :class:`TimestampSemantics` value alongside its
     timestamp. The descriptions on that enum state what each timestamp
-    is understood to mean, and flag the timing relationships that
-    still need to be verified against test data before any correlation
-    window is chosen. Nothing here asserts a correct window.
+    is understood to mean, what has been measured, and what still needs
+    verifying. Each value also has a :class:`TimestampAnchor` stating
+    whether it marks a process's start or its end, which correlation
+    logic uses to decide how the timestamp may be compared. Nothing here
+    asserts a correct correlation window.
+
+Measurements:
+    Values marked "Measured" come from a controlled test on one machine
+    (Windows 11 Home, build 26200): ``powershell.exe`` launched three
+    times, each run kept open for 60 seconds, with process start and exit
+    times recorded independently and compared to the collected Prefetch
+    file, Security log (4688), and SYSTEM hive (BAM). One machine and one
+    build is a starting point, not a general result.
 """
 
 from __future__ import annotations
@@ -61,35 +71,59 @@ class EvidenceType(str, Enum):
     pwsh.exe, the ISE, or an embedding application."""
 
 
+class TimestampAnchor(str, Enum):
+    """Which point in a process's life a timestamp marks."""
+
+    PROCESS_START = "process_start"
+    """At or near process creation. Start-anchored timestamps from
+    different sources can be compared directly within a window."""
+
+    PROCESS_END = "process_end"
+    """At or near process exit. Its distance from the start is however
+    long the process ran, which is unbounded, so it cannot be compared
+    to start times with a fixed window."""
+
+    NOT_EXECUTION_TIME = "not_execution_time"
+    """Not a point in a process's life (or not established). Not used in
+    time comparisons."""
+
+
 class TimestampSemantics(str, Enum):
     """What an evidence record's timestamp actually records.
 
     Each member's description separates what the timestamp is understood
-    to represent from open questions that must be answered before it is
-    compared against another artifact's timestamp.
+    or measured to represent from open questions. :attr:`anchor` gives
+    the corresponding :class:`TimestampAnchor`.
     """
 
     PREFETCH_LAST_RUN = "prefetch_last_run"
     """One of up to eight run times stored in a Prefetch file (one on
-    pre-Windows 8 formats). Written by the Cache Manager, not at the
-    exact moment of process creation; the offset from process start is
-    commonly reported as roughly ten seconds. TO VERIFY: the offset
-    range on the Windows versions Corrobora targets. Runs older than
-    the eighth-most-recent have no Prefetch timestamp at all."""
+    pre-Windows 8 formats). Runs older than the eighth-most-recent have
+    no Prefetch timestamp at all. Measured: within one second of process
+    start on two of two runs checked. This does not support the offset of
+    roughly ten seconds that is commonly reported. TO VERIFY: other
+    Windows builds, and sub-second precision."""
 
     EVTX_TIME_CREATED = "evtx_time_created"
     """The ``TimeCreated`` of an event log record: when the event was
-    written, to sub-second precision. For process-creation events
-    (Security 4688, Sysmon 1) this is expected to be close to process
-    start. For 4104 it is when a script block ran, which may be long
-    after the host process started. TO VERIFY: per event ID, the lag
-    between the underlying action and ``TimeCreated``."""
+    written, to sub-second precision. The only EVTX evidence currently
+    extracted is process creation (Security 4688, Sysmon 1), whose
+    ``TimeCreated`` is anchored to process start. Measured (4688): within
+    one second of process start on two of two runs checked. For other
+    events it means something else (e.g. 4104 is when a script block ran,
+    possibly long after the host process started); a new extractor for
+    such events should add its own semantics value rather than reuse this
+    one. TO VERIFY: Sysmon 1, and other Windows builds."""
 
     REGISTRY_BAM_LAST_EXECUTION = "registry_bam_last_execution"
     """The FILETIME stored in a Background Activity Moderator value's
-    data. Understood to be a per-user, per-executable last-execution
-    time. TO VERIFY: whether it reflects process start or process end,
-    and on which Windows builds BAM is present and populated."""
+    data: one per user and executable, overwritten on each run, so only
+    the most recent run is represented. Measured: matched process *exit*
+    within one second, 61 seconds after process start, for a run kept
+    open for 60 seconds. It is therefore anchored to process end: its
+    offset from start-anchored evidence is however long the program ran.
+    TO VERIFY: other Windows builds, and whether BAM is written while a
+    process is still running."""
 
     REGISTRY_KEY_LAST_WRITE = "registry_key_last_write"
     """A registry key's LastWrite time: when *any* value under that
@@ -100,6 +134,20 @@ class TimestampSemantics(str, Enum):
     UNKNOWN = "unknown"
     """The timestamp's meaning has not been established. Records with
     this semantics should not participate in time-window comparisons."""
+
+    @property
+    def anchor(self) -> TimestampAnchor:
+        """Which point in a process's life this timestamp marks."""
+        return _ANCHORS[self]
+
+
+_ANCHORS: dict[TimestampSemantics, TimestampAnchor] = {
+    TimestampSemantics.PREFETCH_LAST_RUN: TimestampAnchor.PROCESS_START,
+    TimestampSemantics.EVTX_TIME_CREATED: TimestampAnchor.PROCESS_START,
+    TimestampSemantics.REGISTRY_BAM_LAST_EXECUTION: TimestampAnchor.PROCESS_END,
+    TimestampSemantics.REGISTRY_KEY_LAST_WRITE: TimestampAnchor.NOT_EXECUTION_TIME,
+    TimestampSemantics.UNKNOWN: TimestampAnchor.NOT_EXECUTION_TIME,
+}
 
 
 # --------------------------------------------------------------------------

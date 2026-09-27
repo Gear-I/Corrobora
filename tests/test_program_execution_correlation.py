@@ -35,12 +35,16 @@ _SEMANTICS = {
 }
 
 
-def _ev(
+def _ev(  # pylint: disable=too-many-arguments
+    # A test factory: every argument but the first two is an optional
+    # override, and the keyword-only ones keep call sites readable.
     source: ArtifactType,
     offset_seconds: float | None,
     subject: str = "powershell.exe",
+    *,
     ref: str = "r0",
     evidence_type: EvidenceType = EvidenceType.PROGRAM_EXECUTION,
+    semantics: TimestampSemantics | None = None,
 ) -> EvidenceRecord:
     return EvidenceRecord(
         artifact_type=source,
@@ -48,7 +52,7 @@ def _ev(
         subject=subject,
         subject_raw=subject.upper(),
         timestamp=None if offset_seconds is None else BASE + timedelta(seconds=offset_seconds),
-        timestamp_semantics=_SEMANTICS[source],
+        timestamp_semantics=semantics or _SEMANTICS[source],
         source_path=f"{source.value}.bin",
         record_ref=ref,
     )
@@ -77,10 +81,10 @@ class TestStatus:
         assert not registry.observed
         assert "No corresponding Registry evidence was identified." in finding.explanation
 
-    def test_registry_outside_window_partially_corroborated(self):
-        finding = _correlate([_ev(PREFETCH, 0), _ev(EVTX, 5), _ev(REGISTRY, 3600)])
+    def test_evtx_outside_window_partially_corroborated(self):
+        finding = _correlate([_ev(PREFETCH, 0), _ev(EVTX, 3600), _ev(REGISTRY, 10)])
         assert finding.status is CorroborationStatus.PARTIALLY_CORROBORATED
-        assert _in_window(finding) == {PREFETCH, EVTX}
+        assert _in_window(finding) == {PREFETCH, REGISTRY}
         assert any("not within the configured correlation window" in s for s in finding.explanation)
 
     def test_registry_untimed_partially_corroborated(self):
@@ -97,9 +101,10 @@ class TestStatus:
         assert finding.explanation[0].startswith("Only Prefetch contains evidence")
 
     def test_sources_disagree_in_time_needs_review(self):
-        finding = _correlate([_ev(PREFETCH, 0), _ev(EVTX, 3600), _ev(REGISTRY, 7200)])
+        # BAM's exit time precedes every start, so it supports neither run.
+        finding = _correlate([_ev(PREFETCH, 0), _ev(EVTX, 3600), _ev(REGISTRY, -100)])
         assert finding.status is CorroborationStatus.NEEDS_REVIEW
-        assert "no two sources fall within" in finding.explanation[0]
+        assert "no two sources are consistent with the same run" in finding.explanation[0]
 
     def test_only_one_source_examined_needs_review(self):
         finding = _correlate([_ev(PREFETCH, 0)], examined=[PREFETCH])
@@ -128,11 +133,22 @@ class TestWindow:
         assert finding.status is CorroborationStatus.NEEDS_REVIEW
 
     def test_window_is_total_spread_not_distance_from_one_record(self):
-        # EVTX is within 300 s of each of the others, but Prefetch and
-        # Registry are 400 s apart, so all three cannot agree together.
-        finding = _correlate([_ev(PREFETCH, 0), _ev(EVTX, 200), _ev(REGISTRY, 400)])
+        # Three start-anchored sources: EVTX is within 300 s of each of the
+        # others, but the outer two are 400 s apart, so all three cannot
+        # agree together. (MFT stands in for a third start-anchored source.)
+        mft = _ev(ArtifactType.MFT, 400, semantics=TimestampSemantics.PREFETCH_LAST_RUN)
+        finding = _correlate([_ev(PREFETCH, 0), _ev(EVTX, 200), mft])
         assert finding.status is CorroborationStatus.PARTIALLY_CORROBORATED
         assert len(_in_window(finding)) == 2
+
+    def test_window_does_not_bound_exit_times(self):
+        # BAM records exit: a program open for an hour puts it an hour
+        # after the start, which is consistent, not a discrepancy.
+        finding = _correlate(
+            [_ev(PREFETCH, 0), _ev(EVTX, 1), _ev(REGISTRY, 3600)], window=timedelta(seconds=5)
+        )
+        assert finding.status is CorroborationStatus.CORROBORATED
+        assert any("records the program's exit after" in s for s in finding.explanation)
 
     @pytest.mark.parametrize("window", [timedelta(0), timedelta(seconds=-1)])
     def test_non_positive_window_rejected(self, window):
@@ -163,10 +179,63 @@ class TestGroupSelection:
         assert len(prefetch.evidence) == 3
 
     def test_duplicate_records_from_one_source_count_once(self):
-        records = [_ev(REGISTRY, 0, ref="cs1"), _ev(REGISTRY, 0, ref="cs2"), _ev(PREFETCH, 5)]
+        records = [_ev(REGISTRY, 10, ref="cs1"), _ev(REGISTRY, 10, ref="cs2"), _ev(PREFETCH, 5)]
         finding = _correlate(records)
         assert finding.status is CorroborationStatus.PARTIALLY_CORROBORATED
         assert _in_window(finding) == {PREFETCH, REGISTRY}
+
+
+class TestExitTimes:
+    """End-anchored evidence (BAM) joins the run whose exit it records."""
+
+    def test_exit_attaches_to_most_recent_run_before_it(self):
+        # Mirrors the measured test: three 60 s runs about 3 minutes apart,
+        # Prefetch and 4688 at each start, BAM at the last run's exit.
+        records = []
+        for index, start in enumerate((0, 181, 362)):
+            records.append(_ev(PREFETCH, start, ref=f"run[{2 - index}]"))
+            records.append(_ev(EVTX, start + 0.5, ref=f"record[{index}]"))
+        records.append(_ev(REGISTRY, 423))
+        finding = _correlate(records, window=timedelta(seconds=30))
+        assert finding.status is CorroborationStatus.CORROBORATED
+        prefetch = next(s for s in finding.sources if s.artifact_type is PREFETCH)
+        assert prefetch.representative.record_ref == "run[0]"
+
+    def test_exit_does_not_skip_over_a_later_start(self):
+        # Run A (Prefetch + EVTX) at 0, run B (Prefetch only) at 600, BAM at
+        # 700: BAM records run B's exit, not run A's.
+        records = [_ev(PREFETCH, 0, ref="A"), _ev(EVTX, 1), _ev(PREFETCH, 600, ref="B")]
+        finding = _correlate([*records, _ev(REGISTRY, 700)])
+        assert finding.status is CorroborationStatus.PARTIALLY_CORROBORATED
+        assert _in_window(finding) == {PREFETCH, REGISTRY}
+        prefetch = next(s for s in finding.sources if s.artifact_type is PREFETCH)
+        assert prefetch.representative.record_ref == "B"
+
+    def test_exit_between_runs_supports_the_earlier_run(self):
+        records = [_ev(PREFETCH, 0, ref="A"), _ev(EVTX, 1), _ev(PREFETCH, 600, ref="B")]
+        finding = _correlate([*records, _ev(REGISTRY, 300)])
+        assert finding.status is CorroborationStatus.CORROBORATED
+        prefetch = next(s for s in finding.sources if s.artifact_type is PREFETCH)
+        assert prefetch.representative.record_ref == "A"
+
+    def test_exit_before_every_start_is_explained(self):
+        finding = _correlate([_ev(PREFETCH, 0), _ev(EVTX, 5), _ev(REGISTRY, -3600)])
+        assert finding.status is CorroborationStatus.PARTIALLY_CORROBORATED
+        assert _in_window(finding) == {PREFETCH, EVTX}
+        assert any(
+            "still running when the evidence was collected" in s for s in finding.explanation
+        )
+
+    def test_exit_only_evidence_needs_review(self):
+        finding = _correlate([_ev(REGISTRY, 0)])
+        assert finding.status is CorroborationStatus.NEEDS_REVIEW
+
+    def test_start_tie_prefers_most_recent_run(self):
+        records = [_ev(PREFETCH, 0, ref="old"), _ev(EVTX, 0.1), _ev(PREFETCH, 600, ref="new")]
+        records.append(_ev(EVTX, 600.5))
+        finding = _correlate(records, examined=[PREFETCH, EVTX])
+        prefetch = next(s for s in finding.sources if s.artifact_type is PREFETCH)
+        assert prefetch.representative.record_ref == "new"
 
     def test_other_subjects_and_evidence_types_ignored(self):
         records = [
@@ -215,9 +284,21 @@ class TestReport:
 
     def test_outside_window_marked(self):
         report = render_program_execution_report(
-            _correlate([_ev(PREFETCH, 0), _ev(EVTX, 5), _ev(REGISTRY, 3600)])
+            _correlate([_ev(PREFETCH, 0), _ev(EVTX, 3600), _ev(REGISTRY, 10)])
         )
         assert "(outside correlation window)" in report
+
+    def test_exit_time_labelled(self):
+        report = render_program_execution_report(
+            _correlate([_ev(PREFETCH, 0), _ev(EVTX, 5), _ev(REGISTRY, 9)])
+        )
+        assert "Timestamp: 2026-09-27 14:31:51 UTC (process exit)" in report
+
+    def test_exit_time_not_following_starts_marked(self):
+        report = render_program_execution_report(
+            _correlate([_ev(PREFETCH, 0), _ev(EVTX, 5), _ev(REGISTRY, -3600)])
+        )
+        assert "(process exit) (does not follow the agreeing start times)" in report
 
 
 # --------------------------------------------------------------------------
