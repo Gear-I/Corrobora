@@ -114,7 +114,7 @@ def test_app_found_in_prefetch_only_scores_25() -> None:
 
     assert len(results) == 1
     assert results[0].score == 25
-    assert results[0].assessment == "Artifact inconsistency detected."
+    assert results[0].assessment == "Limited corroboration -- found in few artifact types."
     found_types = {p.artifact_type for p in results[0].presence if p.found}
     assert found_types == {"Prefetch"}
 
