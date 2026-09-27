@@ -33,9 +33,10 @@ Measurements:
     Values marked "Measured" come from a controlled test on one machine
     (Windows 11 Home, build 26200): ``powershell.exe`` launched three
     times, each run kept open for 60 seconds, with process start and exit
-    times recorded independently and compared to the collected Prefetch
-    file, Security log (4688), and SYSTEM hive (BAM). One machine and one
-    build is a starting point, not a general result.
+    times recorded independently (from the process object) and compared,
+    to the millisecond, with the collected Prefetch file, Security log
+    (4688), and SYSTEM hive (BAM). One machine and one build is a
+    starting point, not a general result.
 """
 
 from __future__ import annotations
@@ -99,17 +100,18 @@ class TimestampSemantics(str, Enum):
     PREFETCH_LAST_RUN = "prefetch_last_run"
     """One of up to eight run times stored in a Prefetch file (one on
     pre-Windows 8 formats). Runs older than the eighth-most-recent have
-    no Prefetch timestamp at all. Measured: within one second of process
-    start on two of two runs checked. This does not support the offset of
-    roughly ten seconds that is commonly reported. TO VERIFY: other
-    Windows builds, and sub-second precision."""
+    no Prefetch timestamp at all. Measured: 30-32 ms after process start
+    on three of three runs. This does not support the offset of roughly
+    ten seconds that is commonly reported. All eight run slots held real
+    times; no 1601-01-01 placeholders were seen. TO VERIFY: other Windows
+    builds, and Prefetch files with fewer than eight recorded runs."""
 
     EVTX_TIME_CREATED = "evtx_time_created"
     """The ``TimeCreated`` of an event log record: when the event was
     written, to sub-second precision. The only EVTX evidence currently
     extracted is process creation (Security 4688, Sysmon 1), whose
-    ``TimeCreated`` is anchored to process start. Measured (4688): within
-    one second of process start on two of two runs checked. For other
+    ``TimeCreated`` is anchored to process start. Measured (4688): 0-1 ms
+    after process start on three of three runs. For other
     events it means something else (e.g. 4104 is when a script block ran,
     possibly long after the host process started); a new extractor for
     such events should add its own semantics value rather than reuse this
@@ -118,9 +120,10 @@ class TimestampSemantics(str, Enum):
     REGISTRY_BAM_LAST_EXECUTION = "registry_bam_last_execution"
     """The FILETIME stored in a Background Activity Moderator value's
     data: one per user and executable, overwritten on each run, so only
-    the most recent run is represented. Measured: matched process *exit*
-    within one second, 61 seconds after process start, for a run kept
-    open for 60 seconds. It is therefore anchored to process end: its
+    the most recent run is represented. Measured: 2 ms after process
+    *exit* (and 61 s after process start) for a run kept open for 60
+    seconds; only the last of the three runs is represented, as expected.
+    It is therefore anchored to process end: its
     offset from start-anchored evidence is however long the program ran.
     TO VERIFY: other Windows builds, and whether BAM is written while a
     process is still running."""
