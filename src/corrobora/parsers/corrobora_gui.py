@@ -30,7 +30,7 @@ import json
 import logging
 import sys
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from PyQt5.QtCore import QModelIndex, QObject, QRect, Qt, QThread, QUrl, pyqtSignal
@@ -82,6 +82,20 @@ from .correlation_engine import (  # pylint: disable=wrong-import-position
     Severity,
     build_context,
 )
+from ..correlation.context import (  # pylint: disable=wrong-import-position
+    evidence_from_context,
+)
+from ..correlation.program_execution import (  # pylint: disable=wrong-import-position
+    CorroborationStatus,
+    ProgramExecutionFinding,
+    correlate_all_program_execution,
+)
+from ..correlation.report import (  # pylint: disable=wrong-import-position
+    STATUS_LABELS,
+    render_evidence_list,
+    render_program_execution_report,
+)
+from ..models.evidence import EvidenceRecord  # pylint: disable=wrong-import-position
 from ..rules.app_corroboration import (  # pylint: disable=wrong-import-position
     DISCLAIMER,
     AppCorroboration,
@@ -112,6 +126,24 @@ _ARTIFACT_CATEGORIES: tuple[tuple[str, str], ...] = (
     ("registry_paths", "Registry"),
     ("prefetch_paths", "Prefetch"),
     ("mft_paths", "MFT"),
+)
+
+# Program Execution Corroboration display order (attention first) and
+# result colors. Neutral colors on purpose: no result is an accusation.
+_EXECUTION_STATUS_ORDER: dict[CorroborationStatus, int] = {
+    CorroborationStatus.PARTIALLY_CORROBORATED: 0,
+    CorroborationStatus.NEEDS_REVIEW: 1,
+    CorroborationStatus.CORROBORATED: 2,
+}
+_EXECUTION_STATUS_COLORS: dict[CorroborationStatus, str] = {
+    CorroborationStatus.CORROBORATED: "#2e7d32",
+    CorroborationStatus.PARTIALLY_CORROBORATED: "#d68910",
+    CorroborationStatus.NEEDS_REVIEW: "#566573",
+}
+_EXECUTION_NOT_RUN_NOTE = (
+    "Not run. Enter a correlation window (seconds) next to Process to check whether "
+    "Prefetch, Security 4688 / Sysmon 1, and Registry BAM agree on each program's "
+    "execution. There is no validated default window."
 )
 
 # Display labels for known rule categories. A category not listed here
@@ -765,20 +797,54 @@ class AnalysisOutcome:
             corroboration summaries, if the run succeeded.
         error: A description of what went wrong, if the run failed.
             ``None`` on success.
+        execution_findings: Program-execution corroboration results, one
+            per program with execution evidence. Empty if no correlation
+            window was given.
+        execution_evidence: The evidence records those results were
+            computed from, for the per-program evidence listing.
+        execution_window: The correlation window used, or ``None`` if
+            program-execution corroboration was not run.
     """
 
     findings: tuple[CorrelationFinding, ...]
     context: CorrelationContext | None
     app_corroboration: tuple[AppCorroboration, ...]
     error: str | None
+    execution_findings: tuple[ProgramExecutionFinding, ...] = ()
+    execution_evidence: tuple[EvidenceRecord, ...] = ()
+    execution_window: timedelta | None = None
 
 
-def run_analysis(
+def _parse_window(text: str) -> timedelta | None | bool:
+    """Parse the correlation-window field.
+
+    Args:
+        text: The field's contents.
+
+    Returns:
+        ``None`` if empty (skip program-execution corroboration), a
+        positive :class:`timedelta` for a positive whole number of
+        seconds, or ``False`` if the text is not valid.
+    """
+    text = text.strip()
+    if not text:
+        return None
+    try:
+        seconds = int(text)
+    except ValueError:
+        return False
+    if seconds <= 0:
+        return False
+    return timedelta(seconds=seconds)
+
+
+def run_analysis(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     evtx_paths: list[str | Path],
     registry_paths: list[str | Path],
     prefetch_paths: list[str | Path],
     mft_paths: list[str | Path],
     rules: list[CorrelationRule] | None = None,
+    execution_window: timedelta | None = None,
 ) -> AnalysisOutcome:
     """Parse the given artifact sources and run the correlation engine.
 
@@ -796,6 +862,11 @@ def run_analysis(
         rules: The correlation rules to run. Defaults to
             :data:`corrobora.rules.rule_registry.DEFAULT_RULES` (via
             :class:`CorrelationEngine`'s own default) if not provided.
+        execution_window: The correlation window for program-execution
+            corroboration. If ``None``, that analysis is skipped: the
+            window has no validated default, so it runs only when the
+            examiner chooses one. Evidence is extracted from the context
+            already parsed for the rules, so no file is parsed twice.
 
     Returns:
         An :class:`AnalysisOutcome` describing the result.
@@ -810,6 +881,14 @@ def run_analysis(
         engine = CorrelationEngine(rules=rules)
         findings = tuple(engine.run(context))
         app_corroboration = tuple(build_app_corroboration(context))
+        execution_findings: tuple[ProgramExecutionFinding, ...] = ()
+        execution_evidence: tuple[EvidenceRecord, ...] = ()
+        if execution_window is not None:
+            records, examined = evidence_from_context(context)
+            execution_evidence = tuple(records)
+            execution_findings = tuple(
+                correlate_all_program_execution(records, examined, execution_window)
+            )
     except Exception as exc:  # pylint: disable=broad-exception-caught
         # Deliberately broad: this is the top-level boundary between the
         # background worker thread and the GUI; any failure here must be
@@ -818,7 +897,13 @@ def run_analysis(
         return AnalysisOutcome(findings=(), context=None, app_corroboration=(), error=str(exc))
 
     return AnalysisOutcome(
-        findings=findings, context=context, app_corroboration=app_corroboration, error=None
+        findings=findings,
+        context=context,
+        app_corroboration=app_corroboration,
+        error=None,
+        execution_findings=execution_findings,
+        execution_evidence=execution_evidence,
+        execution_window=execution_window,
     )
 
 
@@ -1120,21 +1205,23 @@ class AnalysisWorker(QObject):  # pylint: disable=too-few-public-methods
 
     finished = pyqtSignal(object)
 
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         evtx_paths: list[str | Path],
         registry_paths: list[str | Path],
         prefetch_paths: list[str | Path],
         mft_paths: list[str | Path],
         rules: list[CorrelationRule] | None,
+        execution_window: timedelta | None = None,
     ) -> None:
         """Initialize the worker with the arguments to pass to :func:`run_analysis`."""
         super().__init__()
         self._args = (evtx_paths, registry_paths, prefetch_paths, mft_paths, rules)
+        self._execution_window = execution_window
 
     def run(self) -> None:
         """Run the analysis and emit :attr:`finished` with the outcome."""
-        self.finished.emit(run_analysis(*self._args))
+        self.finished.emit(run_analysis(*self._args, execution_window=self._execution_window))
 
 
 # Corroboration-score fill colors, bucketed by strength. Deliberately the
@@ -1292,6 +1379,9 @@ QLineEdit, QPlainTextEdit, QTextEdit, QTreeWidget, QListWidget {{
     border: 1px solid {_THEME_BORDER};
     border-radius: 4px;
 }}
+QPlainTextEdit#detailText {{
+    font-family: Consolas, "Courier New", monospace;
+}}
 QListWidget::item:selected, QTreeWidget::item:selected {{
     background-color: {_THEME_ACCENT};
     color: #ffffff;
@@ -1400,6 +1490,8 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         self._discovered: DiscoveredArtifacts | None = None
         self._last_findings: list[CorrelationFinding] = []
         self._last_app_corroboration: list[AppCorroboration] = []
+        self._last_execution_findings: list[ProgramExecutionFinding] = []
+        self._last_execution_evidence: tuple[EvidenceRecord, ...] = ()
         self._last_report_path: Path | None = None
         self._analysis_running = False
         self._artifact_items: dict[str, QListWidgetItem] = {}
@@ -1421,6 +1513,7 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         self._build_output_section(layout)
         self._build_available_modules_section(layout)
         self._build_run_controls(layout)
+        self._build_execution_corroboration_panel(layout)
         self._build_app_corroboration_panel(layout)
         self._build_rule_findings_panel(layout)
         self._build_finding_detail_panel(layout)
@@ -1796,6 +1889,21 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         close_button.clicked.connect(self.close)
         primary_layout.addWidget(close_button)
 
+        primary_layout.addSpacing(16)
+        primary_layout.addWidget(QLabel("Correlation window (seconds):"))
+        # Deliberately empty by default: there is no validated window, so
+        # program-execution corroboration only runs when the examiner
+        # chooses one (see run_analysis).
+        self._window_edit = QLineEdit()
+        self._window_edit.setPlaceholderText("required for Program Execution")
+        self._window_edit.setFixedWidth(220)
+        self._window_edit.setToolTip(
+            "Maximum spread between process-start timestamps from different "
+            "sources. Not a validated forensic threshold. Leave empty to skip "
+            "Program Execution Corroboration."
+        )
+        primary_layout.addWidget(self._window_edit)
+
         primary_layout.addStretch(1)
 
         case_data_button = QPushButton("Case Data")
@@ -1803,6 +1911,38 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         primary_layout.addWidget(case_data_button)
 
         layout.addWidget(primary_bar)
+
+    def _build_execution_corroboration_panel(self, layout: QVBoxLayout) -> None:
+        """Build the program-execution corroboration results tree.
+
+        One row per program with execution evidence: its result and the
+        sources that agree. Selecting a row shows the full report and
+        every evidence record in the detail pane. Rows are ordered
+        Partially Corroborated, then Needs Review, then Corroborated, so
+        results that need attention come first; the filter box narrows
+        the list by program name.
+        """
+        group = QGroupBox("Program Execution Corroboration")
+        group_layout = QVBoxLayout(group)
+
+        self._execution_filter = QLineEdit()
+        self._execution_filter.setPlaceholderText("Filter programs...")
+        self._execution_filter.textChanged.connect(self._filter_execution_rows)
+        group_layout.addWidget(self._execution_filter)
+
+        self._execution_tree = QTreeWidget()
+        self._execution_tree.setHeaderLabels(["Program", "Result", "Sources agreeing"])
+        self._execution_tree.setColumnWidth(0, 260)
+        self._execution_tree.setColumnWidth(1, 200)
+        self._execution_tree.setRootIsDecorated(False)
+        self._execution_tree.setMaximumHeight(200)
+        self._execution_tree.itemSelectionChanged.connect(self._on_execution_selected)
+        group_layout.addWidget(self._execution_tree)
+
+        self._execution_note = QLabel(_EXECUTION_NOT_RUN_NOTE)
+        self._execution_note.setWordWrap(True)
+        group_layout.addWidget(self._execution_note)
+        layout.addWidget(group)
 
     def _build_app_corroboration_panel(self, layout: QVBoxLayout) -> None:
         """Build the per-application corroboration tree.
@@ -1870,7 +2010,9 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         detail_layout = QVBoxLayout(detail_group)
         self._detail_text = QPlainTextEdit()
         self._detail_text.setReadOnly(True)
-        self._detail_text.setFixedHeight(110)
+        self._detail_text.setFixedHeight(220)
+        # Fixed-width so the Program Execution evidence table's columns line up.
+        self._detail_text.setObjectName("detailText")
         detail_layout.addWidget(self._detail_text)
         layout.addWidget(detail_group)
 
@@ -2042,6 +2184,16 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
             )
             return
 
+        execution_window = _parse_window(self._window_edit.text())
+        if execution_window is False:
+            QMessageBox.warning(
+                self,
+                "Invalid correlation window",
+                "The correlation window must be a whole number of seconds greater than "
+                "zero, or empty to skip Program Execution Corroboration.",
+            )
+            return
+
         self._analysis_running = True
         self._run_button.setEnabled(False)
         self._export_button.setEnabled(False)
@@ -2051,7 +2203,12 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
 
         self._thread = QThread(self)
         self._worker = AnalysisWorker(
-            evtx_paths, registry_paths, prefetch_paths, mft_paths, self._selected_rules()
+            evtx_paths,
+            registry_paths,
+            prefetch_paths,
+            mft_paths,
+            self._selected_rules(),
+            execution_window=execution_window,
         )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
@@ -2089,10 +2246,20 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
             outcome.app_corroboration, key=lambda a: a.score
         )
 
+        self._last_execution_findings = sorted(
+            outcome.execution_findings,
+            key=lambda f: (_EXECUTION_STATUS_ORDER[f.status], f.subject),
+        )
+        self._last_execution_evidence = outcome.execution_evidence
+
         self._populate_results(all_findings)
         self._populate_app_corroboration(self._last_app_corroboration)
+        self._populate_execution(outcome.execution_window)
         self._export_button.setEnabled(bool(all_findings))
-        self._status_label.setText(f"Done. {len(all_findings)} finding(s).")
+        status = f"Done. {len(all_findings)} finding(s)"
+        if outcome.execution_window is not None:
+            status += f", {len(self._last_execution_findings)} program(s) assessed"
+        self._status_label.setText(status + ".")
         self._auto_export(all_findings)
 
     def _auto_export(self, findings: list[CorrelationFinding]) -> None:
@@ -2136,6 +2303,8 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
         """Clear both results views and the detail pane."""
         self._findings_tree.clear()
         self._corroboration_tree.clear()
+        self._execution_tree.clear()
+        self._execution_note.setText(_EXECUTION_NOT_RUN_NOTE)
         self._set_detail_text("")
 
     def _populate_app_corroboration(self, app_corroboration: list[AppCorroboration]) -> None:
@@ -2154,6 +2323,56 @@ class CorroboraMainWindow(  # pylint: disable=too-many-instance-attributes,too-f
                 child = QTreeWidgetItem(top_item, [presence.artifact_type, f"{symbol} {label}"])
                 child.setForeground(1, QColor(color))
             top_item.setExpanded(True)
+
+    def _populate_execution(self, window: timedelta | None) -> None:
+        """Populate the Program Execution Corroboration tree.
+
+        Args:
+            window: The window the results were computed with, or
+                ``None`` if the analysis was skipped.
+        """
+        self._execution_tree.clear()
+        if window is None:
+            self._execution_note.setText(_EXECUTION_NOT_RUN_NOTE)
+            return
+        for index, finding in enumerate(self._last_execution_findings):
+            agreeing = ", ".join(s.label for s in finding.sources if s.in_window) or "-"
+            item = QTreeWidgetItem(
+                self._execution_tree,
+                [finding.subject, STATUS_LABELS[finding.status], agreeing],
+            )
+            item.setForeground(1, QColor(_EXECUTION_STATUS_COLORS[finding.status]))
+            item.setData(0, Qt.UserRole, index)
+        seconds = int(window.total_seconds())
+        self._execution_note.setText(
+            f"{len(self._last_execution_findings)} program(s) with execution evidence. "
+            f"Correlation window: {seconds} second(s) (configured; not a validated "
+            "forensic threshold). Results short of Corroborated do not establish "
+            "deletion or anti-forensic activity; examiner review is required."
+        )
+        self._filter_execution_rows(self._execution_filter.text())
+
+    def _filter_execution_rows(self, text: str) -> None:
+        """Hide program rows whose name does not contain ``text``."""
+        needle = text.strip().lower()
+        for row in range(self._execution_tree.topLevelItemCount()):
+            item = self._execution_tree.topLevelItem(row)
+            item.setHidden(bool(needle) and needle not in item.text(0).lower())
+
+    def _on_execution_selected(self) -> None:
+        """Show the selected program's report and full evidence list."""
+        items = self._execution_tree.selectedItems()
+        if not items:
+            return
+        index = items[0].data(0, Qt.UserRole)
+        if index is None:
+            return
+        finding = self._last_execution_findings[index]
+        self._set_detail_text(
+            render_program_execution_report(finding)
+            + "\n"
+            + render_evidence_list(self._last_execution_evidence, finding)
+        )
 
     def _on_app_corroboration_selected(self) -> None:
         """Show the selected application's full corroboration detail."""
