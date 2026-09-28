@@ -5,6 +5,20 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 uses [Semantic Versioning](https://semver.org/). While the version is 0.x,
 commands, output formats, and APIs may change between minor releases.
 
+## [Unreleased]
+
+### Added
+
+- **Reproducible output** for `Corrobora-corroborate`: `--relative-paths`
+  shows paths relative to the case with `/` separators (and processes files
+  in that order), and `--output FILE` writes UTF-8 with `\n` line endings,
+  so the same case and command give byte-identical output on any machine
+  and operating system.
+- `scripts/verify_reference_case.py` and `docs/reproducible-testing.md`:
+  a fixed procedure for checking Corrobora against a published reference
+  case on Windows, macOS, or Linux.
+- CI runs the test suite on Windows, macOS, and Linux.
+
 ## [0.1.0] - 2026-09-27
 
 First public release. Corrobora is **alpha software and is not

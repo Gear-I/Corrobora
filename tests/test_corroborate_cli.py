@@ -295,3 +295,73 @@ class TestMain:
         with pytest.raises(SystemExit) as exc:
             cli._main([str(tmp_path)])  # pylint: disable=protected-access
         assert exc.value.code == 2
+
+
+class TestReproducibleOutput:
+    """--relative-paths and --output give byte-identical output across locations."""
+
+    _NAMES = ["POWERSHELL.EXE-12345678.pf", "Security.evtx", "SYSTEM"]
+
+    def _run(self, case: Path, out_file: Path, *extra: str) -> bytes:
+        cli._main(  # pylint: disable=protected-access
+            [
+                str(case),
+                "--window",
+                "30",
+                "--subject",
+                "powershell.exe",
+                "--list-evidence",
+                "--relative-paths",
+                "--output",
+                str(out_file),
+                *extra,
+            ]
+        )
+        return out_file.read_bytes()
+
+    def test_same_bytes_from_different_locations(self, tmp_path):
+        first = tmp_path / "one" / "demo-case"
+        second = tmp_path / "somewhere" / "else" / "demo-case"
+        for folder in (first, second):
+            folder.mkdir(parents=True)
+            _case(folder, self._NAMES)
+        out_a = self._run(first, tmp_path / "a.txt")
+        out_b = self._run(second, tmp_path / "b.txt")
+        assert out_a == out_b
+
+    def test_paths_are_relative_with_forward_slashes(self, tmp_path):
+        case = tmp_path / "demo-case"
+        (case / "Windows" / "Prefetch").mkdir(parents=True)
+        (case / "Windows" / "Prefetch" / "POWERSHELL.EXE-12345678.pf").write_bytes(b"")
+        (case / "Security.evtx").write_bytes(b"")
+        text = self._run(case, tmp_path / "out.txt").decode("utf-8")
+        assert "Case: demo-case\n" in text
+        assert "parsed: Windows/Prefetch/POWERSHELL.EXE-12345678.pf" in text
+        assert str(tmp_path) not in text
+        assert "\\" not in text.split("Evidence")[0].split("Sources")[1]
+
+    def test_output_uses_lf_line_endings(self, tmp_path):
+        case = tmp_path / "demo-case"
+        case.mkdir()
+        _case(case, self._NAMES)
+        data = self._run(case, tmp_path / "out.txt")
+        assert b"\r\n" not in data
+        assert data.endswith(b"\n")
+
+    def test_files_processed_in_display_order(self, tmp_path):
+        case = tmp_path / "demo-case"
+        case.mkdir()
+        _case(case, ["B.EXE-00000002.pf", "A.EXE-00000001.pf", "C.EXE-00000003.pf"])
+        text = self._run(case, tmp_path / "out.txt").decode("utf-8")
+        listed = [line.split("parsed: ")[1] for line in text.splitlines() if "parsed: " in line]
+        assert listed == sorted(listed)
+
+    def test_output_without_relative_paths_keeps_absolute(self, tmp_path):
+        case = tmp_path / "demo-case"
+        case.mkdir()
+        _case(case, self._NAMES)
+        out_file = tmp_path / "out.txt"
+        cli._main(  # pylint: disable=protected-access
+            [str(case), "--window", "30", "--output", str(out_file)]
+        )
+        assert str(case) in out_file.read_text(encoding="utf-8")

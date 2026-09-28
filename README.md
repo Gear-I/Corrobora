@@ -56,8 +56,13 @@ interpretation to the examiner.
 
 ## Installation
 
-**Requirements:** Python 3.11 or later, on Windows (Corrobora's parsers are
-built for Windows forensic artifacts specifically).
+**Requirements:** Python 3.11 or later, on Windows, macOS, or Linux.
+Corrobora analyzes artifacts *from* Windows systems, but the analysis
+itself runs on any of the three, and CI runs the test suite on all of
+them. The steps below use Windows commands; see
+[docs/reproducible-testing.md](docs/reproducible-testing.md) for macOS
+and Linux, and for a repeatable test that gives byte-identical output on
+every platform.
 
 1. Clone the repository and move into it:
 
