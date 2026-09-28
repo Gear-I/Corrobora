@@ -12,6 +12,14 @@ millisecond timestamps, so each recorded run can be checked individually.
 Without it, a one-line summary is printed for every program that has
 execution evidence.
 
+Reproducible output:
+    With ``--relative-paths``, every path is shown relative to the case
+    folder with ``/`` separators, and files are processed in that order,
+    so the same case gives the same output wherever it is unpacked and on
+    any operating system. ``--output FILE`` writes UTF-8 with ``\n`` line
+    endings, so two runs can be compared byte for byte (redirecting stdout
+    on Windows would write ``\r\n`` instead).
+
 What is examined, and why:
 
 - **Prefetch:** every discovered ``.pf`` file.
@@ -34,9 +42,12 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+import sys
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
+from pathlib import Path
 
 from corrobora.correlation.context import is_process_creation_log, is_system_hive
 from corrobora.correlation.program_execution import (
@@ -370,8 +381,91 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="List every parsed file (by default only the first few per source).",
     )
+    parser.add_argument(
+        "--relative-paths",
+        action="store_true",
+        help=(
+            "Show paths relative to the case folder, with '/' separators, so the "
+            "output is the same on any machine and operating system."
+        ),
+    )
+    parser.add_argument(
+        "--output",
+        metavar="FILE",
+        help=(
+            "Write the output to FILE (UTF-8, '\\n' line endings) instead of standard "
+            "output, for byte-for-byte comparison."
+        ),
+    )
     parser.add_argument("--verbose", action="store_true", help="Show parser progress logging.")
     return parser
+
+
+# --------------------------------------------------------------------------
+# Reproducible output
+# --------------------------------------------------------------------------
+
+
+class _PathDisplay:  # pylint: disable=too-few-public-methods
+    """Maps real file paths to case-relative, ``/``-separated display paths.
+
+    Note:
+        ``too-few-public-methods`` is suppressed: this is a small callable
+        holding the case root.
+    """
+
+    def __init__(self, case: str, artifacts: DiscoveredArtifacts) -> None:
+        """Pick the case root: the case folder itself, or for a zip or disk
+        image (extracted to a temporary folder) the folder all its
+        artifacts share."""
+        case_path = Path(case)
+        if case_path.is_dir():
+            self.root = str(case_path)
+        else:
+            paths = [
+                *artifacts.evtx_paths,
+                *artifacts.registry_paths,
+                *artifacts.prefetch_paths,
+                *artifacts.mft_paths,
+            ]
+            parents = [str(Path(path).parent) for path in paths]
+            self.root = os.path.commonpath(parents) if parents else str(case_path.parent)
+
+    def __call__(self, path: str) -> str:
+        """Return ``path`` relative to the case root, with ``/`` separators."""
+        return Path(os.path.relpath(path, self.root)).as_posix()
+
+    def scrub(self, text: str) -> str:
+        """Remove the case root from free text such as parse-failure reasons."""
+        return text.replace(self.root + os.sep, "").replace(self.root, ".")
+
+
+def _sorted_for_display(
+    artifacts: DiscoveredArtifacts, display: _PathDisplay
+) -> DiscoveredArtifacts:
+    """Order every artifact list by display path, so processing order (and
+    therefore output order) doesn't depend on the OS's path separator."""
+    return replace(
+        artifacts,
+        evtx_paths=tuple(sorted(artifacts.evtx_paths, key=display)),
+        registry_paths=tuple(sorted(artifacts.registry_paths, key=display)),
+        prefetch_paths=tuple(sorted(artifacts.prefetch_paths, key=display)),
+        mft_paths=tuple(sorted(artifacts.mft_paths, key=display)),
+    )
+
+
+def _relativize(collection: CollectionResult, display: _PathDisplay) -> CollectionResult:
+    """Rewrite every path in a collection result as a display path."""
+    result = CollectionResult(
+        records=[replace(r, source_path=display(r.source_path)) for r in collection.records]
+    )
+    for source, info in collection.sources.items():
+        result.sources[source] = SourceCollection(
+            parsed=[display(path) for path in info.parsed],
+            failed=[(display(path), display.scrub(reason)) for path, reason in info.failed],
+            skipped=[display(path) for path in info.skipped],
+        )
+    return result
 
 
 def _main(argv: Sequence[str] | None = None) -> int:
@@ -400,37 +494,56 @@ def _main(argv: Sequence[str] | None = None) -> int:
         logger.error("Could not load case: %s", exc)
         return 1
 
+    case_label = args.case
+    display: _PathDisplay | None = None
+    if args.relative_paths:
+        display = _PathDisplay(args.case, artifacts)
+        artifacts = _sorted_for_display(artifacts, display)
+        case_label = Path(args.case).name
+
     collection = collect_evidence(artifacts, all_evtx=args.all_evtx)
-    print(
+    if display is not None:
+        collection = _relativize(collection, display)
+
+    out: list[str] = [
         render_collection_summary(
-            args.case,
+            case_label,
             args.window,
             collection,
             len(artifacts.mft_paths),
             list_all_files=args.list_files,
         )
-    )
+        + "\n"
+    ]
 
     if not args.subject:
         findings = correlate_all_program_execution(
             collection.records, collection.examined, args.window
         )
-        print(render_subject_summary(findings), end="")
-        return 0
-
-    for raw_subject in args.subject:
-        subject = normalize_executable_name(raw_subject)
-        finding = correlate_program_execution(
-            collection.records, subject, collection.examined, args.window
-        )
-        print("=" * 48)
-        if finding is None:
-            print(f"\nNo execution evidence for {subject} was found in the examined sources.\n")
-        else:
-            print()
-            print(render_program_execution_report(finding))
+        out.append(render_subject_summary(findings))
+    else:
+        for raw_subject in args.subject:
+            subject = normalize_executable_name(raw_subject)
+            finding = correlate_program_execution(
+                collection.records, subject, collection.examined, args.window
+            )
+            out.append("=" * 48 + "\n")
+            if finding is None:
+                out.append(
+                    f"\nNo execution evidence for {subject} was found in the examined "
+                    "sources.\n\n"
+                )
+                continue
+            out.append("\n" + render_program_execution_report(finding) + "\n")
             if args.list_evidence:
-                print(render_evidence_list(collection.records, finding))
+                out.append(render_evidence_list(collection.records, finding) + "\n")
+
+    text = "".join(out)
+    if args.output:
+        with open(args.output, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+    else:
+        sys.stdout.write(text)
     return 0
 
 
