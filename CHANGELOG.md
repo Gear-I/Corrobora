@@ -18,6 +18,18 @@ commands, output formats, and APIs may change between minor releases.
   a fixed procedure for checking Corrobora against a published reference
   case on Windows, macOS, or Linux.
 - CI runs the test suite on Windows, macOS, and Linux.
+- **Synthetic reference case** (`scripts/build_reference_case.py`): a
+  deterministic generator for a fictional Windows case in the real formats
+  (Prefetch v26, EVTX 3.1, a SYSTEM hive with BAM), with seven programs
+  covering each corroboration outcome. Its expected outputs are in
+  `tests/reference/case-1/`, and CI checks on every platform that building
+  it gives the published SHA-256 and that verification passes.
+
+### Fixed
+
+- Unused Prefetch run-time slots are no longer reported as runs dated
+  1601-01-01 (libscca returns a zero timestamp for them), which affected
+  every program run fewer than eight times.
 
 ## [0.1.0] - 2026-09-27
 

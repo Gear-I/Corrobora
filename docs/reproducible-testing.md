@@ -8,19 +8,50 @@ It works because every input is fixed:
 
 | Input | Fixed by |
 |---|---|
-| The evidence | A published **reference case** (a zip of real Windows artifacts from a clean test VM), identified by its SHA-256 |
-| The command | The exact arguments recorded in the reference manifest |
+| The evidence | The **reference case**: a synthetic Windows case, built by a deterministic script and identified by its SHA-256 |
+| The commands | The exact arguments recorded in the reference manifest |
 | The Corrobora version | The version the expected output was made with, recorded in the manifest |
 | Paths and line endings | `--relative-paths` (paths relative to the case, `/` separators) and `--output` (UTF-8, `\n` line endings) |
 
 Corrobora itself is deterministic: no randomness, no network access, no
 dependence on the local time zone or locale (all times are UTC), and files
-are processed in a fixed order.
+are processed in a fixed order. CI runs the whole procedure on Windows,
+macOS, and Linux with Python 3.11, 3.12, and 3.13.
 
-> **Status:** the reference case has not been published yet. The
-> procedure and tooling below are in place; the download link, SHA-256,
-> and expected output will be added to `tests/reference/case-1/` when it
-> is.
+## The reference case
+
+`corrobora-reference-case-1.zip` is **synthetic**: every file is generated
+by [`scripts/build_reference_case.py`](../scripts/build_reference_case.py),
+and the computer (`DEMO-WS01`), account (`analyst`), SID, programs, and
+times are fictional. No real system's data is included, so it is safe to
+share and inspect.
+
+The files are minimal but valid instances of the real formats that
+Corrobora's parsers read:
+
+| File | Format |
+|---|---|
+| `*.pf` (7 files) | Prefetch version 26 (Windows 8.1 layout), uncompressed |
+| `Security.evtx` | EVTX 3.1, Security log, Event ID 4688 only, with valid checksums |
+| `SYSTEM` | Registry hive (regf 1.5) with the `Select` and BAM keys |
+| `runs.csv` | Ground-truth start and exit times of the `powershell.exe` runs |
+
+The timings follow what was measured on a real system (see
+`TimestampSemantics` in `src/corrobora/models/evidence.py`): 4688 at
+process start, Prefetch about 30 ms later, BAM about 2 ms after exit.
+
+Each program is set up to exercise a different outcome at a 30-second
+window:
+
+| Program | Evidence | Result |
+|---|---|---|
+| `powershell.exe` | Prefetch, 4688, and BAM for the last of three runs | Corroborated |
+| `certutil.exe` | Prefetch, 4688, BAM | Corroborated |
+| `cmd.exe` | Prefetch, 4688; no BAM entry | Partially Corroborated |
+| `whoami.exe` | Prefetch, 4688; BAM holds an earlier run's exit (still running at collection) | Partially Corroborated |
+| `notepad.exe` | Prefetch, BAM; ran before auditing was enabled | Partially Corroborated |
+| `ping.exe` | Prefetch, and a 4688 event 45 s away | Needs Review |
+| `mspaint.exe` | Prefetch only | Needs Review |
 
 ## 1. Install
 
@@ -53,36 +84,40 @@ this procedure doesn't open the GUI. On Debian or Ubuntu:
 sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
 ```
 
-To test the exact version the expected output was made with, check out its
-tag before installing (for example `git checkout v0.1.0`). The manifest's
-`corrobora_version` names it.
+The manifest's `corrobora_version` names the version the expected output
+was made with; the manifest and expected outputs in a given commit always
+match the code in that commit.
 
-## 2. Download the reference case
-
-Download the reference case zip from the link in
-`tests/reference/case-1/manifest.json` (`case_url`). **Don't unzip it**:
-Corrobora reads the zip directly, and the verification checks the zip's
-SHA-256 exactly as published.
-
-## 3. Verify
+## 2. Build the reference case
 
 From the repository folder, with the virtual environment active:
 
 ```bash
-python scripts/verify_reference_case.py path/to/corrobora-reference-case-1.zip
+python scripts/build_reference_case.py build
+```
+
+This writes `build/corrobora-reference-case-1.zip` and prints its SHA-256.
+The build is deterministic (sorted, uncompressed zip entries with fixed
+timestamps), so it must print the same SHA-256 as `case_sha256` in
+[`tests/reference/case-1/manifest.json`](../tests/reference/case-1/manifest.json)
+on every machine.
+
+## 3. Verify
+
+```bash
+python scripts/verify_reference_case.py build/corrobora-reference-case-1.zip
 ```
 
 The script:
 
-1. checks the zip's SHA-256 against the manifest, so a corrupted or
-   different download fails immediately;
-2. runs `corrobora-corroborate` with the exact arguments from the manifest;
-3. compares the output, byte for byte, with the expected output.
+1. checks the zip's SHA-256 against the manifest;
+2. runs `corrobora-corroborate` with each set of arguments in the manifest;
+3. compares each output, byte for byte, with its expected output.
 
 A successful run ends with:
 
 ```text
-PASS: output is byte-for-byte identical to the expected output.
+PASS: all 2 run(s) are byte-for-byte identical to the expected output.
 ```
 
 On a mismatch it prints `FAIL` and a line-by-line diff. The first lines
@@ -91,20 +126,22 @@ include them when reporting a difference.
 
 ## 4. Run it yourself
 
-The verification runs this command, which you can run directly to see and
-keep the output:
+These are the two commands the verification runs, so you can see and keep
+the output:
 
 ```bash
-corrobora-corroborate path/to/corrobora-reference-case-1.zip --window 30 --subject powershell.exe --list-evidence --relative-paths --output output.txt
+corrobora-corroborate build/corrobora-reference-case-1.zip --window 30 --relative-paths --list-files --output summary.txt
+corrobora-corroborate build/corrobora-reference-case-1.zip --window 30 --relative-paths --subject powershell.exe --subject whoami.exe --subject notepad.exe --subject ping.exe --list-evidence --output reports.txt
 ```
 
-Check that `output.txt` matches the manifest's `expected_output_sha256`:
+Each file's SHA-256 should equal the matching `expected_output_sha256` in
+the manifest:
 
 | OS | Command |
 |---|---|
-| Windows (PowerShell) | `Get-FileHash output.txt -Algorithm SHA256` |
-| macOS | `shasum -a 256 output.txt` |
-| Linux | `sha256sum output.txt` |
+| Windows (PowerShell) | `Get-FileHash summary.txt -Algorithm SHA256` |
+| macOS | `shasum -a 256 summary.txt` |
+| Linux | `sha256sum summary.txt` |
 
 Windows prints the hash in upper case; the comparison is case-insensitive.
 
@@ -113,31 +150,26 @@ Windows prints the hash in upper case; the comparison is case-insensitive.
 | Cause | Why |
 |---|---|
 | A different or modified case | Different evidence, different results. The SHA-256 check catches this. |
-| A different Corrobora version | Output formats can change between versions (see `CHANGELOG.md`). Check out the manifest's version. |
-| Omitting `--relative-paths` | Paths then include where the case was unzipped. |
-| Redirecting output (`> output.txt`) instead of `--output` | On Windows, redirection writes `\r\n` line endings. |
+| A different Corrobora version | Output formats can change between versions (see `CHANGELOG.md`). Use the manifest from the same commit as the code. |
+| Omitting `--relative-paths` | Paths then include where the case was built. |
+| Redirecting output (`> file.txt`) instead of `--output` | On Windows, redirection writes `\r\n` line endings. |
 | Different arguments | A different window, subject, or options is a different test. |
 
 Files that fail to parse are reported with the parser's own error text,
 which can differ between operating systems. The reference case therefore
-contains only files that parse cleanly.
+contains only files that parse cleanly (a test checks this).
 
-## How the reference case is built
+## For maintainers
 
-The reference case is built once, by a maintainer, on a **clean Windows
-VM** with no personal data:
+After an intended change to Corrobora's output, regenerate the expected
+outputs, review the diff, and commit them with the change:
 
-1. Enable process-creation auditing (Security 4688).
-2. Launch `powershell.exe` several times at recorded times, each run kept
-   open for a fixed period.
-3. Collect the Prefetch files, a Security log export containing only
-   Event ID 4688, and the `SYSTEM` hive.
-4. Zip the collection, record its SHA-256, and publish it as a GitHub
-   release asset.
-5. Generate the expected output with
-   `python scripts/verify_reference_case.py <zip> --update` and commit it
-   with the manifest.
+```bash
+python scripts/build_reference_case.py build
+python scripts/verify_reference_case.py build/corrobora-reference-case-1.zip --update
+git diff tests/reference/
+```
 
-The recorded run times are included in the zip (`runs.csv`), so the
-timestamps Corrobora reports can be checked against when each process
-actually started and exited.
+Changing the scenario in `build_reference_case.py` changes the zip, so
+update `case_sha256` in the manifest as well. Expected outputs are stored
+with their line endings untouched (see `.gitattributes`).
