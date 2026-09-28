@@ -1,0 +1,213 @@
+CORROBORA
+Program Execution Corroboration
+
+Case: corrobora-reference-case-1.zip
+Correlation window: 30 seconds (configured; not a validated forensic threshold)
+
+Sources
+  Prefetch: examined -- 7 file(s) parsed, 0 failed
+      parsed: CERTUTIL.EXE-2B3C4D5E.pf
+      parsed: CMD.EXE-3C4D5E6F.pf
+      parsed: MSPAINT.EXE-708192A3.pf
+      parsed: NOTEPAD.EXE-5E6F7081.pf
+      parsed: PING.EXE-6F708192.pf
+      ... and 2 more (use --list-files to show all)
+  EVTX: examined -- 1 file(s) parsed, 0 failed
+      parsed: Security.evtx
+  Registry: examined -- 1 file(s) parsed, 0 failed
+      parsed: SYSTEM
+
+================================================
+
+CORROBORA
+Cross-Artifact Analysis
+
+Finding: Program Execution
+Subject: powershell.exe
+Correlation window: 30 seconds (configured; not a validated forensic threshold)
+
+Evidence
+------------------------------------------------
+
+Prefetch
+Observed: Yes
+Timestamp: 2026-09-20 14:06:00 UTC
+Run count: 12
+Source: POWERSHELL.EXE-1A2B3C4D.pf (run[0])
+Records for this subject: 5
+
+EVTX
+Observed: Yes
+Timestamp: 2026-09-20 14:06:00 UTC
+Event ID: 4688
+Source: Security.evtx (record[18202])
+Records for this subject: 3
+
+Registry
+Observed: Yes
+Timestamp: 2026-09-20 14:07:01 UTC (process exit)
+Location: BAM (S-1-5-21-1111111111-2222222222-3333333333-1001)
+Source: SYSTEM
+Value: \Device\HarddiskVolume3\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+
+------------------------------------------------
+
+Result: CORROBORATED
+
+3 independent artifact sources contain evidence consistent with powershell.exe execution within the configured correlation window.
+Registry records the program's exit after these start times, consistent with the same run.
+Examiner review is recommended.
+
+All execution evidence for powershell.exe (5 Prefetch, 3 EVTX, 1 Registry)
+------------------------------------------------
+   Time (UTC)               Source    Marks  Record             Detail
+   2026-09-18 14:00:00.030  Prefetch  start  run[4]             POWERSHELL.EXE-1A2B3C4D.pf, run count 12
+   2026-09-19 14:00:00.030  Prefetch  start  run[3]             POWERSHELL.EXE-1A2B3C4D.pf, run count 12
+   2026-09-20 14:00:00.000  EVTX      start  record[18200]      Security.evtx, Event ID 4688
+   2026-09-20 14:00:00.030  Prefetch  start  run[2]             POWERSHELL.EXE-1A2B3C4D.pf, run count 12
+   2026-09-20 14:03:00.000  EVTX      start  record[18201]      Security.evtx, Event ID 4688
+   2026-09-20 14:03:00.030  Prefetch  start  run[1]             POWERSHELL.EXE-1A2B3C4D.pf, run count 12
+*  2026-09-20 14:06:00.000  EVTX      start  record[18202]      Security.evtx, Event ID 4688
+*  2026-09-20 14:06:00.030  Prefetch  start  run[0]             POWERSHELL.EXE-1A2B3C4D.pf, run count 12
+*  2026-09-20 14:07:01.002  Registry  exit   BAM ControlSet001  SYSTEM
+------------------------------------------------
+* = part of the agreeing group in the report above. Marks: start = process start, exit = process exit.
+
+================================================
+
+CORROBORA
+Cross-Artifact Analysis
+
+Finding: Program Execution
+Subject: whoami.exe
+Correlation window: 30 seconds (configured; not a validated forensic threshold)
+
+Evidence
+------------------------------------------------
+
+Prefetch
+Observed: Yes
+Timestamp: 2026-09-20 14:09:42 UTC
+Run count: 2
+Source: WHOAMI.EXE-4D5E6F70.pf (run[0])
+Records for this subject: 2
+
+EVTX
+Observed: Yes
+Timestamp: 2026-09-20 14:09:42 UTC
+Event ID: 4688
+Source: Security.evtx (record[18205])
+
+Registry
+Observed: Yes
+Timestamp: 2026-09-20 09:00:00 UTC (process exit) (does not follow the agreeing start times)
+Location: BAM (S-1-5-21-1111111111-2222222222-3333333333-1001)
+Source: SYSTEM
+Value: \Device\HarddiskVolume3\Windows\System32\whoami.exe
+
+------------------------------------------------
+
+Result: PARTIALLY CORROBORATED
+
+Prefetch and EVTX contain consistent evidence.
+Registry evidence was identified, but the exit time it records does not follow the other sources' most recent start. This is expected if the program was still running when the evidence was collected.
+This discrepancy does not establish deletion or anti-forensic activity. Examiner review is required.
+
+All execution evidence for whoami.exe (2 Prefetch, 1 Registry, 1 EVTX)
+------------------------------------------------
+   Time (UTC)               Source    Marks  Record             Detail
+   2026-09-20 09:00:00.030  Prefetch  start  run[1]             WHOAMI.EXE-4D5E6F70.pf, run count 2
+   2026-09-20 09:00:00.402  Registry  exit   BAM ControlSet001  SYSTEM
+*  2026-09-20 14:09:42.000  EVTX      start  record[18205]      Security.evtx, Event ID 4688
+*  2026-09-20 14:09:42.030  Prefetch  start  run[0]             WHOAMI.EXE-4D5E6F70.pf, run count 2
+------------------------------------------------
+* = part of the agreeing group in the report above. Marks: start = process start, exit = process exit.
+
+================================================
+
+CORROBORA
+Cross-Artifact Analysis
+
+Finding: Program Execution
+Subject: notepad.exe
+Correlation window: 30 seconds (configured; not a validated forensic threshold)
+
+Evidence
+------------------------------------------------
+
+Prefetch
+Observed: Yes
+Timestamp: 2026-09-20 13:15:00 UTC
+Run count: 7
+Source: NOTEPAD.EXE-5E6F7081.pf (run[0])
+
+EVTX
+Observed: No
+
+Registry
+Observed: Yes
+Timestamp: 2026-09-20 13:27:00 UTC (process exit)
+Location: BAM (S-1-5-21-1111111111-2222222222-3333333333-1001)
+Source: SYSTEM
+Value: \Device\HarddiskVolume3\Windows\System32\notepad.exe
+
+------------------------------------------------
+
+Result: PARTIALLY CORROBORATED
+
+Prefetch and Registry contain consistent evidence.
+Registry records the program's exit after these start times, consistent with the same run.
+No corresponding EVTX evidence was identified.
+This discrepancy does not establish deletion or anti-forensic activity. Examiner review is required.
+
+All execution evidence for notepad.exe (1 Prefetch, 1 Registry)
+------------------------------------------------
+   Time (UTC)               Source    Marks  Record             Detail
+*  2026-09-20 13:15:00.030  Prefetch  start  run[0]             NOTEPAD.EXE-5E6F7081.pf, run count 7
+*  2026-09-20 13:27:00.002  Registry  exit   BAM ControlSet001  SYSTEM
+------------------------------------------------
+* = part of the agreeing group in the report above. Marks: start = process start, exit = process exit.
+
+================================================
+
+CORROBORA
+Cross-Artifact Analysis
+
+Finding: Program Execution
+Subject: ping.exe
+Correlation window: 30 seconds (configured; not a validated forensic threshold)
+
+Evidence
+------------------------------------------------
+
+Prefetch
+Observed: Yes
+Timestamp: 2026-09-20 14:11:00 UTC
+Run count: 3
+Source: PING.EXE-6F708192.pf (run[0])
+
+EVTX
+Observed: Yes
+Timestamp: 2026-09-20 14:10:15 UTC
+Event ID: 4688
+Source: Security.evtx (record[18206])
+
+Registry
+Observed: No
+
+------------------------------------------------
+
+Result: NEEDS REVIEW
+
+Evidence of ping.exe execution exists in Prefetch and EVTX, but no two sources are consistent with the same run within the configured correlation window.
+No corresponding Registry evidence was identified.
+This discrepancy does not establish deletion or anti-forensic activity. Examiner review is required.
+
+All execution evidence for ping.exe (1 EVTX, 1 Prefetch)
+------------------------------------------------
+  Time (UTC)               Source    Marks  Record         Detail
+  2026-09-20 14:10:15.000  EVTX      start  record[18206]  Security.evtx, Event ID 4688
+  2026-09-20 14:11:00.030  Prefetch  start  run[0]         PING.EXE-6F708192.pf, run count 3
+------------------------------------------------
+* = part of the agreeing group in the report above. Marks: start = process start, exit = process exit.
+

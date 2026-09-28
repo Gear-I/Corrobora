@@ -1,0 +1,31 @@
+CORROBORA
+Program Execution Corroboration
+
+Case: corrobora-reference-case-1.zip
+Correlation window: 30 seconds (configured; not a validated forensic threshold)
+
+Sources
+  Prefetch: examined -- 7 file(s) parsed, 0 failed
+      parsed: CERTUTIL.EXE-2B3C4D5E.pf
+      parsed: CMD.EXE-3C4D5E6F.pf
+      parsed: MSPAINT.EXE-708192A3.pf
+      parsed: NOTEPAD.EXE-5E6F7081.pf
+      parsed: PING.EXE-6F708192.pf
+      parsed: POWERSHELL.EXE-1A2B3C4D.pf
+      parsed: WHOAMI.EXE-4D5E6F70.pf
+  EVTX: examined -- 1 file(s) parsed, 0 failed
+      parsed: Security.evtx
+  Registry: examined -- 1 file(s) parsed, 0 failed
+      parsed: SYSTEM
+
+Subject         Result                  Sources agreeing
+certutil.exe    CORROBORATED            Prefetch, EVTX, Registry
+cmd.exe         PARTIALLY CORROBORATED  Prefetch, EVTX
+mspaint.exe     NEEDS REVIEW            -
+notepad.exe     PARTIALLY CORROBORATED  Prefetch, Registry
+ping.exe        NEEDS REVIEW            -
+powershell.exe  CORROBORATED            Prefetch, EVTX, Registry
+whoami.exe      PARTIALLY CORROBORATED  Prefetch, EVTX
+
+Run again with --subject <name> for a full report on a program.
+Results short of CORROBORATED do not establish deletion or anti-forensic activity. Examiner review is required.

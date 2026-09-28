@@ -1,0 +1,38 @@
+{
+  "case_file": "corrobora-reference-case-1.zip",
+  "case_sha256": "4121485f5d077b77e2f5197f1d8b461ca38619b52fa30f133228b4fe680e2890",
+  "case_generator": "scripts/build_reference_case.py",
+  "corrobora_version": "0.1.0",
+  "runs": [
+    {
+      "name": "summary",
+      "args": [
+        "--window",
+        "30",
+        "--relative-paths",
+        "--list-files"
+      ],
+      "expected_output": "expected-summary.txt",
+      "expected_output_sha256": "b0327283c054f453eedd1c1b7d7852aa9be0601c41529c1ced5e109eda6963bb"
+    },
+    {
+      "name": "reports",
+      "args": [
+        "--window",
+        "30",
+        "--relative-paths",
+        "--subject",
+        "powershell.exe",
+        "--subject",
+        "whoami.exe",
+        "--subject",
+        "notepad.exe",
+        "--subject",
+        "ping.exe",
+        "--list-evidence"
+      ],
+      "expected_output": "expected-reports.txt",
+      "expected_output_sha256": "b7c9cfb7d2e6e582ad510ab10994a5e740d0c61ebf5c8b2d58e5f6779a754cc5"
+    }
+  ]
+}
