@@ -72,6 +72,10 @@ _PREFETCH_FILENAME_PATTERN = re.compile(r"^(?P<name>.+)-(?P<hash>[0-9A-Fa-f]{8})
 # many most-recent run timestamps.
 _MAX_LAST_RUN_TIMES = 8
 
+# A zero FILETIME, which libscca returns (as this datetime) for unused
+# last-run-time slots.
+_FILETIME_EPOCH = datetime(1601, 1, 1, tzinfo=UTC)
+
 
 # --------------------------------------------------------------------------
 # Exceptions
@@ -340,7 +344,7 @@ class PrefetchExtractor:  # pylint: disable=too-few-public-methods
 
         ``pyscca`` does not expose a direct "number of last run
         times" accessor, so this reads indices sequentially and stops
-        at the first missing/unreadable slot. Running out of slots is
+        at the first missing, unreadable, or unused (zero) slot. Running out of slots is
         expected behavior (older Prefetch format versions only have
         one), so unlike other extraction helpers this does not record
         a :class:`ParseFailure` when enumeration stops.
@@ -363,7 +367,13 @@ class PrefetchExtractor:  # pylint: disable=too-few-public-methods
                 break
             if raw_timestamp is None:
                 break
-            timestamps.append(self._normalize_timestamp(raw_timestamp))
+            timestamp = self._normalize_timestamp(raw_timestamp)
+            if timestamp <= _FILETIME_EPOCH:
+                # An unused slot: libscca returns a zero FILETIME as
+                # 1601-01-01 rather than None. Slots fill most recent
+                # first, so the first empty one ends the list.
+                break
+            timestamps.append(timestamp)
         return timestamps
 
     def _extract_referenced_filenames(
