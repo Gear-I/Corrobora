@@ -7,6 +7,8 @@ commands, output formats, and APIs may change between minor releases.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-24
+
 ### Added
 
 - **Reproducible output** for `Corrobora-corroborate`: `--relative-paths`
@@ -15,8 +17,8 @@ commands, output formats, and APIs may change between minor releases.
   so the same case and command give byte-identical output on any machine
   and operating system.
 - `scripts/verify_reference_case.py` and `docs/reproducible-testing.md`:
-  a fixed procedure for checking Corrobora against a published reference
-  case on Windows, macOS, or Linux.
+  a fixed procedure for checking Corrobora against the reference case on
+  Windows, macOS, or Linux.
 - CI runs the test suite on Windows, macOS, and Linux.
 - **Synthetic reference case** (`scripts/build_reference_case.py`): a
   deterministic generator for a fictional Windows case in the real formats
@@ -29,7 +31,8 @@ commands, output formats, and APIs may change between minor releases.
 
 - Unused Prefetch run-time slots are no longer reported as runs dated
   1601-01-01 (libscca returns a zero timestamp for them), which affected
-  every program run fewer than eight times.
+  every program run fewer than eight times. **Upgrading from 0.1.0 is
+  recommended:** 0.1.0 reports these false runs as execution evidence.
 
 ## [0.1.0] - 2026-09-27
 
@@ -105,4 +108,6 @@ project and renamed on August 7, 2026.
 - `Corrobora-registry --help` and `Corrobora-prefetch --help` print usage
   instead of treating `--help` as a file path.
 
+[Unreleased]: https://github.com/Gear-I/Corrobora/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Gear-I/Corrobora/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Gear-I/Corrobora/releases/tag/v0.1.0
