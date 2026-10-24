@@ -2,7 +2,7 @@
   "case_file": "corrobora-reference-case-1.zip",
   "case_sha256": "4121485f5d077b77e2f5197f1d8b461ca38619b52fa30f133228b4fe680e2890",
   "case_generator": "scripts/build_reference_case.py",
-  "corrobora_version": "0.1.0",
+  "corrobora_version": "0.2.0",
   "runs": [
     {
       "name": "summary",

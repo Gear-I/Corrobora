@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "corrobora"
-version = "0.1.0"
+version = "0.2.0"
 description = "A Windows digital forensics framework that checks whether independent artifacts (Prefetch, EVTX, Registry, MFT) corroborate each other."
 readme = "README.md"
 requires-python = ">=3.11"
