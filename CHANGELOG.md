@@ -7,6 +7,15 @@ commands, output formats, and APIs may change between minor releases.
 
 ## [Unreleased]
 
+### Added
+
+- **Chronoscope plugin** (`src/corrobora/chronoscope_plugin.py`): with
+  Chronoscope installed (`pip install -e ".[chronoscope]"`), `chronoscope
+  ingest` puts Prefetch run times and volume creation times, registry key
+  LastWrite times (with their values), and BAM/DAM execution times on its
+  timeline, using Corrobora's parsers. Execution events carry Corrobora's
+  timestamp semantics.
+
 ## [0.2.0] - 2026-10-24
 
 ### Added

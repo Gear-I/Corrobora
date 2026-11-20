@@ -53,6 +53,10 @@ interpretation to the examiner.
   Enter a correlation window next to **Process** to also run
   program-execution corroboration; selecting a program shows its full
   report and every evidence record.
+- **Chronoscope plugin** -- with
+  [Chronoscope](https://github.com/Gear-I/Chronoscope) installed, its
+  timeline builder uses Corrobora's Prefetch and Registry parsers too.
+  See [Using Corrobora with Chronoscope](#using-corrobora-with-chronoscope).
 
 ## Installation
 
@@ -227,6 +231,42 @@ Corrobora-corroborate "C:\triage\case001" --window 300
 # Launch the GUI
 Corrobora-gui
 ```
+
+## Using Corrobora with Chronoscope
+
+[Chronoscope](https://github.com/Gear-I/Chronoscope) builds a single,
+sorted UTC timeline from many artifact sources. Corrobora registers its
+Prefetch and Registry parsers as Chronoscope plugins, so with both
+installed in the same environment, `chronoscope ingest` also puts these
+on the timeline:
+
+- **Prefetch** (`prefetch`): every recorded run time (`Last Run Time`,
+  then `Previous Run Time` for the older ones) and the creation time of
+  each volume the file references. A file whose name doesn't match its
+  embedded hash says so in the event message.
+- **Registry hives** (`registry`): every key's LastWrite time, with the
+  key's values as attributes (at most 64 per key, with long data
+  shortened), and one `Last Execution (BAM)` or `Last Execution (DAM)`
+  event per BAM/DAM entry in a SYSTEM hive.
+
+Each execution event carries a `timestamp_semantics` attribute with the
+same meaning as Corrobora's `TimestampSemantics` (see
+`src/corrobora/models/evidence.py`). In particular, a BAM time marks when
+the process *exited*, not when it started.
+
+```powershell
+pip install -e ".[chronoscope,images]"   # images: only for E01/raw disk images
+chronoscope parsers   # lists prefetch and registry
+chronoscope init C:\cases\case001-timeline --name case001 --examiner "J. Doe"
+chronoscope ingest C:\cases\case001-timeline C:\triage\case001 --label WS01
+```
+
+Chronoscope also reads these files inside zip, 7z and tar archives and
+E01 or raw disk images (the `images` extra provides the libraries for
+both tools). Corrobora itself doesn't need Chronoscope; the plugin is
+loaded only by Chronoscope. As in the rest of Corrobora, registry
+transaction logs (`.LOG1`/`.LOG2`) are not applied: a hive with
+unflushed changes is parsed as it is on disk, with a warning.
 
 ## Running tests
 

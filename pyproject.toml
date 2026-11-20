@@ -50,8 +50,15 @@ images = [
     "libvhdi-python>=20251119",
     "libvmdk-python>=20260714",
 ]
+# The Chronoscope timeline builder, which loads Corrobora's Prefetch and
+# Registry parsers as plugins (see src/corrobora/chronoscope_plugin.py).
+# Chronoscope is not on PyPI yet, so this points at its release wheel.
+chronoscope = [
+    "chronoscope-forensics[archives] @ https://github.com/Gear-I/Chronoscope/releases/download/v0.1.0a1/chronoscope_forensics-0.1.0a1-py3-none-any.whl",
+]
 dev = [
     "pytest>=8.0.0",
+    "chronoscope-forensics[archives] @ https://github.com/Gear-I/Chronoscope/releases/download/v0.1.0a1/chronoscope_forensics-0.1.0a1-py3-none-any.whl",
     "ruff>=0.5.0",
     "mypy>=1.10.0",
     "pylint>=3.0.0",
@@ -77,6 +84,13 @@ corrobora-case = "corrobora.parsers.case_ingest:_main"
 corrobora-ez-import = "corrobora.parsers.ez_tool_importer:_main"
 corrobora-ez-run = "corrobora.parsers.ez_tool_orchestrator:_main"
 corrobora-gui = "corrobora.parsers.corrobora_gui:main"
+
+# --- Chronoscope parser plugins -----------------------------------------
+# With Chronoscope installed, `chronoscope ingest` also parses Prefetch
+# files and registry hives using Corrobora's parsers.
+[project.entry-points."chronoscope.parsers"]
+prefetch = "corrobora.chronoscope_plugin:PrefetchTimelineParser"
+registry = "corrobora.chronoscope_plugin:RegistryTimelineParser"
  
 # --- Package layout -------------------------------------------------------
 # Corrobora is a proper namespaced package: `corrobora.parsers.evtx`,

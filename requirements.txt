@@ -12,3 +12,4 @@ pytsk3>=20260715
 libewf-python>=20240506
 libvhdi-python>=20251119
 libvmdk-python>=20260714
+chronoscope-forensics @ https://github.com/Gear-I/Chronoscope/releases/download/v0.1.0a1/chronoscope_forensics-0.1.0a1-py3-none-any.whl
